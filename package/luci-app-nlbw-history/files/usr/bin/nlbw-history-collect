@@ -1,0 +1,240 @@
+#!/bin/sh
+# Sample nlbwmon's cumulative counters and record the delta since the last
+# sample. Two streams are kept:
+#
+#   per device            full sampling resolution
+#   per device+protocol   aggregated into protocol_interval buckets, because
+#                         the protocol dimension multiplies the row count
+#
+# Samples land in a RAM spool first and are flushed to persistent storage
+# every flush_interval seconds, to keep writes down.
+#
+#   nlbw-history-collect            one sample (called by nlbw-history-loop)
+#   nlbw-history-collect --flush    flush the spools now
+#   nlbw-history-collect --status   print diagnostics
+#
+# It only queries nlbwmon over its control socket; no packet inspection, no
+# firewall rules, no effect on software or hardware flow offloading.
+
+. /lib/functions.sh
+
+config_load nlbw-history
+config_get DATA_DIR main data_dir /srv/nlbw-history
+config_get RETENTION main retention 30
+config_get FLUSH_INTERVAL main flush_interval 600
+config_get PROTOCOLS main protocols 1
+config_get PROTO_INTERVAL main protocol_interval 900
+
+case "$RETENTION" in ''|*[!0-9]*) RETENTION=30 ;; esac
+case "$FLUSH_INTERVAL" in ''|*[!0-9]*) FLUSH_INTERVAL=600 ;; esac
+case "$PROTO_INTERVAL" in ''|*[!0-9]*) PROTO_INTERVAL=900 ;; esac
+[ "$RETENTION" -lt 1 ] && RETENTION=1
+[ "$PROTO_INTERVAL" -lt 60 ] && PROTO_INTERVAL=60
+
+NLBW=/usr/sbin/nlbw
+RUN=/tmp/nlbw-history
+LOCK="$RUN/lock"
+LASTFLUSH="$RUN/lastflush"
+LASTSAMPLE="$RUN/lastsample"
+
+mkdir -p "$RUN" || exit 1
+mkdir -p "$DATA_DIR" 2>/dev/null
+
+NOW=$(date +%s)
+# Seconds since local midnight, without relying on date -d parsing.
+# The 0 prefixes are stripped because the shell would read them as octal.
+_h=$(date +%H); _m=$(date +%M); _s=$(date +%S)
+MIDNIGHT=$((NOW - (${_h#0} * 3600 + ${_m#0} * 60 + ${_s#0})))
+BUCKET=$((NOW - NOW % PROTO_INTERVAL))
+
+day_of() {
+	# epoch -> YYYY-MM-DD, busybox and GNU date
+	date -D %s -d "$1" +%Y-%m-%d 2>/dev/null || date -d "@$1" +%Y-%m-%d
+}
+
+# $1 spool file, $2 file suffix, $3 aggregate (1 = sum rows with the same key)
+flush_one() {
+	_spool=$1; _suffix=$2; _agg=$3
+	[ -s "$_spool" ] || return 0
+	mkdir -p "$DATA_DIR" || return 1
+	awk -v mid="$MIDNIGHT" -v agg="$_agg" \
+	    -v today="$DATA_DIR/$(day_of "$NOW")$_suffix" \
+	    -v yday="$DATA_DIR/$(day_of $((MIDNIGHT - 1)))$_suffix" '
+		{
+			f = ($1 >= mid) ? today : yday
+			if (!agg) { print >> f; next }
+			# key is everything but the two counters
+			k = $1
+			for (i = 2; i <= NF - 2; i++) k = k "\t" $i
+			rx[f, k] += $(NF - 1); tx[f, k] += $NF
+			files[f, k] = f; keys[f, k] = k
+		}
+		END {
+			for (i in keys)
+				printf "%s\t%.0f\t%.0f\n", keys[i], rx[i], tx[i] >> files[i]
+		}
+	' "$_spool" || return 1
+	: > "$_spool"
+	return 0
+}
+
+flush_spool() {
+	flush_one "$RUN/spool" ".tsv" 0
+	flush_one "$RUN/spool.proto" ".proto.tsv" 1
+	echo "$NOW" > "$LASTFLUSH"
+	prune
+	return 0
+}
+
+prune() {
+	cutoff=$(day_of $((NOW - RETENTION * 86400)))
+	for f in "$DATA_DIR"/????-??-??.tsv "$DATA_DIR"/????-??-??.proto.tsv; do
+		[ -f "$f" ] || continue
+		b=${f##*/}; b=${b%%.*}
+		awk -v a="$b" -v c="$cutoff" 'BEGIN { exit !(a < c) }' && rm -f "$f"
+	done
+	return 0
+}
+
+status() {
+	echo "data_dir:        $DATA_DIR"
+	echo "retention:       $RETENTION days"
+	echo "flush_interval:  $FLUSH_INTERVAL s"
+	if [ "$PROTOCOLS" = "1" ]; then
+		echo "protocols:       on, ${PROTO_INTERVAL}s buckets"
+	else
+		echo "protocols:       off"
+	fi
+	if [ -x "$NLBW" ]; then
+		rows=$("$NLBW" -c csv -g mac -q -n 2>/dev/null | sed 1d | grep -c .)
+		echo "nlbwmon:         reachable, $rows device rows in the current period"
+	else
+		echo "nlbwmon:         $NLBW not found - install nlbwmon"
+	fi
+	if [ -s "$LASTSAMPLE" ]; then
+		last=$(cat "$LASTSAMPLE")
+		echo "last sample:     $(date -D %s -d "$last" 2>/dev/null || date -d "@$last") ($((NOW - last))s ago)"
+	else
+		echo "last sample:     never"
+	fi
+	echo "spool:           $(cat "$RUN/spool" "$RUN/spool.proto" 2>/dev/null | wc -l | tr -d ' ') lines waiting"
+	echo "stored:          $(ls -1 "$DATA_DIR"/????-??-??*.tsv 2>/dev/null | wc -l | tr -d ' ') day files, $(du -sh "$DATA_DIR" 2>/dev/null | cut -f1) on disk"
+	if { [ -f /var/run/nlbw-history.pid ] && kill -0 "$(cat /var/run/nlbw-history.pid)" 2>/dev/null; } ||
+	   pgrep -f '/usr/bin/nlbw-history-loop' >/dev/null 2>&1; then
+		echo "sampler:         running"
+	else
+		echo "sampler:         NOT running - start it with /etc/init.d/nlbw-history start"
+	fi
+}
+
+case "$1" in
+	--status) status; exit 0 ;;
+esac
+
+# Only one sampler at a time; recover a lock left behind by a killed process.
+if ! mkdir "$LOCK" 2>/dev/null; then
+	if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then
+		rmdir "$LOCK" 2>/dev/null
+		mkdir "$LOCK" 2>/dev/null || exit 0
+	else
+		exit 0
+	fi
+fi
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+
+case "$1" in
+	--flush) flush_spool; exit $? ;;
+esac
+
+[ -x "$NLBW" ] || {
+	logger -t nlbw-history "$NLBW not found, is nlbwmon installed?"
+	exit 1
+}
+
+# nlbw -c csv -q -n prints a header row of column names, then tab separated
+# unquoted values. Columns are located by name, because their order changes
+# with the grouping.
+sample() {
+	# $1 = mode (dev|proto), $2 = nlbw grouping, $3 = state, $4 = spool, $5 = timestamp
+	_tmp="$RUN/sample.$$"
+	"$NLBW" -c csv -g "$2" -q -n 2>/dev/null > "$_tmp" || { rm -f "$_tmp"; return 1; }
+	[ -s "$_tmp" ] || { rm -f "$_tmp"; return 1; }
+
+	awk -F'\t' -v mode="$1" -v ts="$5" -v state="$3" -v newstate="$3.new" -v spool="$4" '
+		BEGIN {
+			while ((getline line < state) > 0) {
+				n = split(line, a, "\t")
+				if (mode == "dev" && n >= 3) {
+					prx[a[1]] = a[2] + 0; ptx[a[1]] = a[3] + 0; known[a[1]] = 1
+				}
+				else if (mode == "proto" && n >= 4) {
+					k = a[1] SUBSEP a[2]
+					prx[k] = a[3] + 0; ptx[k] = a[4] + 0; known[k] = 1
+				}
+			}
+			close(state)
+		}
+		NR == 1 {
+			for (i = 1; i <= NF; i++) col[$i] = i
+			cm = col["mac"]; cr = col["rx_bytes"]; ct = col["tx_bytes"]; cl = col["layer7"]
+			if (!cm || !cr || !ct) exit 2
+			next
+		}
+		{
+			mac = tolower($cm)
+			if (length(mac) != 17 || mac !~ /^[0-9a-f:]+$/) next
+			if (mode == "proto") {
+				p = cl ? $cl : ""
+				gsub(/[\\"]/, "", p)
+				if (p == "") p = "unknown"
+				k = mac SUBSEP p
+			}
+			else k = mac
+			rx[k] += $cr + 0
+			tx[k] += $ct + 0
+		}
+		END {
+			for (k in rx) {
+				split(k, kk, SUBSEP)
+				if (mode == "dev")
+					printf "%s\t%.0f\t%.0f\n", kk[1], rx[k], tx[k] > newstate
+				else
+					printf "%s\t%s\t%.0f\t%.0f\n", kk[1], kk[2], rx[k], tx[k] > newstate
+				if (!(k in known)) continue
+				# A counter going backwards means nlbwmon rolled over to a new
+				# accounting period, so the current value is the traffic since.
+				drx = (rx[k] >= prx[k]) ? rx[k] - prx[k] : rx[k]
+				dtx = (tx[k] >= ptx[k]) ? tx[k] - ptx[k] : tx[k]
+				if (drx <= 0 && dtx <= 0) continue
+				if (mode == "dev")
+					printf "%d\t%s\t%.0f\t%.0f\n", ts, kk[1], drx, dtx >> spool
+				else
+					printf "%d\t%s\t%s\t%.0f\t%.0f\n", ts, kk[1], kk[2], drx, dtx >> spool
+			}
+		}
+	' "$_tmp"
+	_rc=$?
+	rm -f "$_tmp"
+	[ "$_rc" = 0 ] && [ -f "$3.new" ] && mv "$3.new" "$3"
+	return $_rc
+}
+
+if ! sample dev mac "$RUN/state" "$RUN/spool" "$NOW"; then
+	logger -t nlbw-history "cannot read device counters from nlbwmon"
+	exit 1
+fi
+
+if [ "$PROTOCOLS" = "1" ]; then
+	sample proto mac,layer7 "$RUN/state.proto" "$RUN/spool.proto" "$BUCKET" ||
+		logger -t nlbw-history "cannot read protocol counters from nlbwmon"
+else
+	rm -f "$RUN/state.proto" "$RUN/spool.proto"
+fi
+
+echo "$NOW" > "$LASTSAMPLE"
+
+last=$(cat "$LASTFLUSH" 2>/dev/null)
+case "$last" in ''|*[!0-9]*) last=0 ;; esac
+[ $((NOW - last)) -ge "$FLUSH_INTERVAL" ] && flush_spool
+
+exit 0

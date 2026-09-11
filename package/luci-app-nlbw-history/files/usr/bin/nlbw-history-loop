@@ -1,0 +1,27 @@
+#!/bin/sh
+# Sampling loop. Re-reads the interval from /etc/config/nlbw-history every
+# cycle, so a config change takes effect after at most one period.
+
+. /lib/functions.sh
+
+flush_and_exit() {
+	/usr/bin/nlbw-history-collect --flush >/dev/null 2>&1
+	exit 0
+}
+trap flush_and_exit INT TERM
+
+logger -t nlbw-history "sampler started"
+
+while :; do
+	/usr/bin/nlbw-history-collect
+
+	config_load nlbw-history 2>/dev/null
+	config_get PERIOD main period 60
+	case "$PERIOD" in
+		''|*[!0-9]*) PERIOD=60 ;;
+	esac
+	[ "$PERIOD" -lt 5 ] && PERIOD=5
+
+	sleep "$PERIOD" &
+	wait $!
+done

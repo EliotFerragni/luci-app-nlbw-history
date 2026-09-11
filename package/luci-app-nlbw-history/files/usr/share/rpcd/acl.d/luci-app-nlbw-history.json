@@ -1,0 +1,14 @@
+{
+	"luci-app-nlbw-history": {
+		"description": "Read historical per-device bandwidth data and manage its settings",
+		"read": {
+			"ubus": {
+				"luci_nlbw_history": [ "series", "status" ]
+			},
+			"uci": [ "nlbw-history" ]
+		},
+		"write": {
+			"uci": [ "nlbw-history" ]
+		}
+	}
+}

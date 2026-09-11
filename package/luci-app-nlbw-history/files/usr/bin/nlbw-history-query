@@ -1,0 +1,213 @@
+#!/bin/sh
+# Aggregate the stored samples into a bucketed time series and print JSON.
+#
+#   nlbw-history-query <hours> [buckets] [mac] [protocol]
+#
+# Reads the persistent day files plus the not yet flushed RAM spools, so the
+# most recent samples always show up. What gets stacked depends on the filters:
+#
+#   no filters            per device, at full sampling resolution
+#   a device selected     per protocol for that device
+#   a protocol selected   per device for that protocol
+#
+# Output:
+# { "from":…, "to":…, "step":…, "buckets":…, "last_sample":…,
+#   "mode":"devices"|"protocols", "coarse":true|false,
+#   "devices":[ {"mac":…,"name":…,"rx":…,"tx":…,"charted":…} ],
+#   "protocols":[ {"name":…,"rx":…,"tx":…} ],
+#   "series": { "<key|other>": {"rx":[…],"tx":[…]} } }
+
+. /lib/functions.sh
+
+config_load nlbw-history
+config_get DATA_DIR main data_dir /srv/nlbw-history
+config_get PROTO_INTERVAL main protocol_interval 900
+case "$PROTO_INTERVAL" in ''|*[!0-9]*) PROTO_INTERVAL=900 ;; esac
+[ "$PROTO_INTERVAL" -lt 60 ] && PROTO_INTERVAL=60
+
+RUN=/tmp/nlbw-history
+TOP=8
+
+HOURS=${1:-24}
+BUCKETS=${2:-160}
+MAC=$(echo "${3:-}" | tr 'A-Z' 'a-z')
+PROTO=${4:-}
+
+case "$HOURS" in ''|*[!0-9]*) HOURS=24 ;; esac
+case "$BUCKETS" in ''|*[!0-9]*) BUCKETS=160 ;; esac
+[ "$HOURS" -lt 1 ] && HOURS=1
+[ "$HOURS" -gt 720 ] && HOURS=720
+[ "$BUCKETS" -lt 10 ] && BUCKETS=10
+[ "$BUCKETS" -gt 400 ] && BUCKETS=400
+case "$MAC" in
+	'' ) ;;
+	[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) ;;
+	* ) MAC='' ;;
+esac
+
+# Protocol data is stored in protocol_interval buckets, so asking for finer
+# buckets than that would just leave gaps between the bars.
+if [ -n "$MAC" ] || [ -n "$PROTO" ]; then
+	MAXB=$((HOURS * 3600 / PROTO_INTERVAL))
+	[ "$MAXB" -lt 10 ] && MAXB=10
+	[ "$BUCKETS" -gt "$MAXB" ] && BUCKETS=$MAXB
+fi
+
+NOW=$(date +%s)
+FROM=$((NOW - HOURS * 3600))
+LAST=$(cat "$RUN/lastsample" 2>/dev/null)
+case "$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
+
+day_of() { date -D %s -d "$1" +%Y-%m-%d 2>/dev/null || date -d "@$1" +%Y-%m-%d; }
+
+# Only the day files that can hold samples in the window. Device rows have 4
+# fields, protocol rows 5, so both sets can be read in a single pass.
+FILES=""
+d=$FROM
+while [ "$d" -le $((NOW + 86400)) ]; do
+	for f in "$DATA_DIR/$(day_of "$d").tsv" "$DATA_DIR/$(day_of "$d").proto.tsv"; do
+		[ -f "$f" ] && FILES="$FILES $f"
+	done
+	d=$((d + 86400))
+done
+[ -f "$RUN/spool" ] && FILES="$FILES $RUN/spool"
+[ -f "$RUN/spool.proto" ] && FILES="$FILES $RUN/spool.proto"
+
+# Names: DHCP leases win over static host entries, both optional.
+NAMES="$RUN/names.$$"
+{
+	uci -q show dhcp 2>/dev/null | tr -d "\047" | awk '
+		{
+			e = index($0, "="); if (!e) next
+			v = substr($0, e + 1); k = substr($0, 1, e - 1)
+			p = split(k, kp, "."); if (p < 3) next
+			s = kp[2]; f = kp[p]
+			if (f == "mac") m[s] = v; else if (f == "name") n[s] = v
+		}
+		END { for (s in m) if (n[s] != "") print tolower(m[s]) "\t" n[s] }'
+	[ -f /tmp/dhcp.leases ] && awk '$4 != "*" && $4 != "" { print tolower($2) "\t" $4 }' /tmp/dhcp.leases
+} > "$NAMES" 2>/dev/null
+
+awk -F'\t' -v from="$FROM" -v now="$NOW" -v nb="$BUCKETS" -v top="$TOP" \
+    -v onlymac="$MAC" -v onlyproto="$PROTO" -v last="$LAST" -v namefile="$NAMES" '
+BEGIN {
+	step = int((now - from) / nb)
+	if (step < 1) step = 1
+	while ((getline l < namefile) > 0) {
+		split(l, a, "\t")
+		if (a[1] != "" && a[2] != "") name[a[1]] = a[2]
+	}
+	close(namefile)
+	# devices when nothing is selected or a protocol is, protocols when a
+	# single device is selected
+	bykey = (onlymac != "" && onlyproto == "") ? "proto" : "mac"
+	coarse = (onlyproto != "" || onlymac != "")
+}
+/^#/ { next }
+{
+	ts = $1 + 0
+	if (ts < from || ts > now) next
+	b = int((ts - from) / step)
+	if (b < 0) b = 0
+	if (b >= nb) b = nb - 1
+}
+NF == 4 {
+	mac = tolower($2)
+	# device totals come from the finer stream unless a protocol is selected
+	if (!coarse || onlyproto == "") {
+		dtot[mac] += $3 + $4; drx[mac] += $3; dtx[mac] += $4
+		seendev[mac] = 1
+	}
+	if (!coarse) {
+		RX[mac, b] += $3; TX[mac, b] += $4
+		tot[mac] += $3 + $4; seen[mac] = 1
+	}
+	next
+}
+NF == 5 {
+	mac = tolower($2); p = $3
+	if (onlymac == "" || mac == onlymac) {
+		ptot[p] += $4 + $5; prx[p] += $4; ptx[p] += $5; seenproto[p] = 1
+	}
+	if (onlyproto != "") {
+		if (p != onlyproto) next
+		dtot[mac] += $4 + $5; drx[mac] += $4; dtx[mac] += $5; seendev[mac] = 1
+	}
+	if (!coarse) next
+	if (onlymac != "" && mac != onlymac) next
+	if (onlyproto != "" && p != onlyproto) next
+	k = (bykey == "proto") ? p : mac
+	RX[k, b] += $4; TX[k, b] += $5
+	tot[k] += $4 + $5; seen[k] = 1
+}
+function jstr(s,   i, c, out) {
+	out = ""
+	for (i = 1; i <= length(s); i++) {
+		c = substr(s, i, 1)
+		if (c == "\"" || c == "\\") out = out "\\" c
+		else if (c ~ /[[:cntrl:]]/) out = out " "
+		else out = out c
+	}
+	return out
+}
+function sortkeys(arr, ord, weight,   i, j, k, n) {
+	n = 0
+	for (i in arr) { n++; ord[n] = i }
+	for (i = 2; i <= n; i++) {
+		k = ord[i]
+		for (j = i - 1; j >= 1 && weight[ord[j]] < weight[k]; j--) ord[j + 1] = ord[j]
+		ord[j + 1] = k
+	}
+	return n
+}
+function emit(k, key,   b) {
+	printf "%s\"%s\":{\"rx\":[", sep0, jstr(key)
+	for (b = 0; b < nb; b++) printf "%s%.0f", (b ? "," : ""), RX[k, b]
+	printf "],\"tx\":["
+	for (b = 0; b < nb; b++) printf "%s%.0f", (b ? "," : ""), TX[k, b]
+	printf "]}"
+	sep0 = ","
+}
+END {
+	n = sortkeys(seen, ord, tot)
+	nshow = (n > top) ? top : n
+	for (i = nshow + 1; i <= n; i++)
+		for (b = 0; b < nb; b++) {
+			RX["\002other", b] += RX[ord[i], b]
+			TX["\002other", b] += TX[ord[i], b]
+		}
+	for (i = 1; i <= nshow; i++) charted[ord[i]] = 1
+
+	printf "{\"from\":%d,\"to\":%d,\"step\":%d,\"buckets\":%d,\"last_sample\":%d,", \
+		from, now, step, nb, last
+	printf "\"mode\":\"%s\",\"coarse\":%s,", \
+		(bykey == "proto" ? "protocols" : "devices"), (coarse ? "true" : "false")
+
+	printf "\"devices\":["
+	nd = sortkeys(seendev, dord, dtot)
+	for (i = 1; i <= nd; i++) {
+		m = dord[i]
+		printf "%s{\"mac\":\"%s\",\"name\":\"%s\",\"rx\":%.0f,\"tx\":%.0f,\"charted\":%s}", \
+			(i > 1 ? "," : ""), jstr(m), jstr((m in name) ? name[m] : m), drx[m], dtx[m], \
+			((bykey == "mac" && (m in charted)) ? "true" : "false")
+	}
+
+	printf "],\"protocols\":["
+	np = sortkeys(seenproto, pord, ptot)
+	for (i = 1; i <= np; i++) {
+		p = pord[i]
+		printf "%s{\"name\":\"%s\",\"rx\":%.0f,\"tx\":%.0f,\"charted\":%s}", \
+			(i > 1 ? "," : ""), jstr(p), prx[p], ptx[p], \
+			((bykey == "proto" && (p in charted)) ? "true" : "false")
+	}
+
+	printf "],\"series\":{"
+	sep0 = ""
+	for (i = 1; i <= nshow; i++) emit(ord[i], ord[i])
+	if (n > nshow) emit("\002other", "other")
+	printf "}}\n"
+}
+' $FILES /dev/null
+
+rm -f "$NAMES"
+exit 0

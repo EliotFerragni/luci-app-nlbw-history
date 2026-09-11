@@ -1,0 +1,16 @@
+config nlbw_history 'main'
+	# Seconds between samples. Lower gives sharper graphs and more data.
+	option period '60'
+	# Days of history to keep.
+	option retention '30'
+	# Samples are buffered in RAM and written to data_dir this often, so the
+	# router is not writing to storage every single interval.
+	option flush_interval '600'
+	# Must be persistent storage. /tmp and /var are RAM on OpenWrt and would
+	# lose the whole history on every reboot.
+	option data_dir '/srv/nlbw-history'
+	# Also record which protocol each device was using.
+	option protocols '1'
+	# Protocol traffic is aggregated into buckets this many seconds wide,
+	# because the protocol dimension multiplies the number of rows stored.
+	option protocol_interval '900'

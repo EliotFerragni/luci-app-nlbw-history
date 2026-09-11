@@ -1,0 +1,36 @@
+{
+	"admin/services/nlbw-history": {
+		"title": "Bandwidth History",
+		"order": 70,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-nlbw-history" ]
+		}
+	},
+
+	"admin/services/nlbw-history/graphs": {
+		"title": "Graphs",
+		"order": 1,
+		"action": {
+			"type": "view",
+			"path": "nlbw-history/main"
+		},
+		"depends": {
+			"acl": [ "luci-app-nlbw-history" ]
+		}
+	},
+
+	"admin/services/nlbw-history/settings": {
+		"title": "Settings",
+		"order": 2,
+		"action": {
+			"type": "view",
+			"path": "nlbw-history/settings"
+		},
+		"depends": {
+			"acl": [ "luci-app-nlbw-history" ]
+		}
+	}
+}

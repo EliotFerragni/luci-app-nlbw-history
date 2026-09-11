@@ -1,0 +1,57 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: |
+          for f in install.sh build-ipk.sh \
+                   package/luci-app-nlbw-history/files/usr/bin/* \
+                   package/luci-app-nlbw-history/files/etc/init.d/*; do
+            sh -n "$f" || exit 1
+          done
+      - name: JavaScript syntax
+        run: |
+          for f in package/luci-app-nlbw-history/files/www/luci-static/resources/view/nlbw-history/*.js; do
+            node --check "$f" || exit 1
+          done
+      - name: JSON syntax
+        run: |
+          for f in package/luci-app-nlbw-history/files/usr/share/rpcd/acl.d/*.json \
+                   package/luci-app-nlbw-history/files/usr/share/luci/menu.d/*.json; do
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" || exit 1
+          done
+
+  package:
+    needs: check
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ipk
+        run: ./build-ipk.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipk
+          path: "*.ipk"
+          retention-days: 3
+      - name: Attach to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" *.ipk --clobber
