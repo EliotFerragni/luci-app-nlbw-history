@@ -349,14 +349,14 @@ return view.extend({
 		state.data = res[1];
 		loadUnits();
 
-		const deviceSel = E('select', { 'class': 'cbi-input-select', style: 'min-width:240px;margin-right:12px' });
-		const protoSel = E('select', { 'class': 'cbi-input-select', style: 'min-width:140px;margin-right:12px' });
-		const rangeSel = E('select', { 'class': 'cbi-input-select', style: 'margin-right:12px' });
+		const deviceSel = E('select', { 'class': 'cbi-input-select', style: 'min-width:240px' });
+		const protoSel = E('select', { 'class': 'cbi-input-select', style: 'min-width:140px' });
+		const rangeSel = E('select', { 'class': 'cbi-input-select' });
 		const unitsSel = E('select', { 'class': 'cbi-input-select' }, [
 			E('option', Object.assign({ value: 'si' }, UNITS === 'si' ? { selected: 'selected' } : {}),
-				_('MB (1000 bytes per kB)')),
+				_('kB, MB, GB (1000 per step)')),
 			E('option', Object.assign({ value: 'iec' }, UNITS === 'iec' ? { selected: 'selected' } : {}),
-				_('MiB (1024 bytes per KiB)'))
+				_('KiB, MiB, GiB (1024 per step)'))
 		]);
 
 		[ [ 1, _('Last hour') ], [ 6, _('Last 6 hours') ], [ 24, _('Last 24 hours') ],
@@ -372,6 +372,13 @@ return view.extend({
 		if (months.length)
 			rangeSel.appendChild(E('optgroup', { label: _('Calendar month') },
 				months.map(function(m) { return E('option', { value: m.value }, m.label); })));
+
+		// Label and control travel together: themes with wide inputs wrap this
+		// row, and a bare label would otherwise be left behind on its own line.
+		function field(label, control) {
+			return E('span', { style: 'display:flex;align-items:center;gap:6px;margin-right:16px' },
+				[ E('label', {}, label), control ]);
+		}
 
 		const chartNode = E('div', {});
 		const tableNode = E('div', {});
@@ -505,11 +512,11 @@ return view.extend({
 		const body = E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('Bandwidth History')),
 			E('div', { 'class': 'cbi-section' }, [
-				E('div', { style: 'display:flex;flex-wrap:wrap;align-items:center;gap:6px' }, [
-					E('label', {}, _('Device')), deviceSel,
-					E('label', {}, _('Protocol')), protoSel,
-					E('label', {}, _('Period')), rangeSel,
-					E('label', {}, _('Units')), unitsSel
+				E('div', { style: 'display:flex;flex-wrap:wrap;align-items:center;gap:8px 0' }, [
+					field(_('Device'), deviceSel),
+					field(_('Protocol'), protoSel),
+					field(_('Period'), rangeSel),
+					field(_('Units'), unitsSel)
 				]),
 				E('p', { 'class': 'cbi-section-descr', style: 'margin:8px 0 0' },
 					_('Pick a device to see what it was doing, or a protocol to see who was using it. Untick a row in the table, or click a legend entry, to drop it from the chart so the rest can use the full height.')),
