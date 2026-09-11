@@ -168,3 +168,18 @@ whether the problem is the data or the display:
     /www/luci-static/resources/view/nlbw-history/settings.js the settings page
     <data_dir>/YYYY-MM-DD.tsv                                history: epoch, mac, rx, tx
     <data_dir>/YYYY-MM-DD.proto.tsv                          history: epoch, mac, protocol, rx, tx
+
+## How this was written
+
+Claude, Anthropic's coding agent, wrote this package: the samplers, the ucode
+backend, the LuCI views, the build script and this README. The maintainer set
+the direction, reviewed the result and runs it on the target hardware.
+
+`CLAUDE.md` in the repository root is the context the agent works from. It is
+worth a read before changing anything, because it records the busybox, ubus and
+LuCI constraints the code is shaped around, and the mistakes already made and
+fixed.
+
+None of that changes what you should do before installing a package from a
+stranger on a router you care about: read the scripts. They are deliberately
+short, and there are only four of them.
