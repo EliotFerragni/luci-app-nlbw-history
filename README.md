@@ -7,6 +7,8 @@ between samples, and draws it in LuCI under **Services → Bandwidth History**, 
 It only talks to nlbwmon over its control socket. No packet inspection, no
 firewall rules, no effect on software or hardware flow offloading.
 
+![The graphs page, every device stacked over the last 24 hours](docs/graphs-overview.png)
+
 The page shows every device stacked, so you can see who was using the line at
 any moment. Two filters change what gets stacked:
 
@@ -16,6 +18,8 @@ any moment. Two filters change what gets stacked:
 - a protocol selected: one band per device, so you can see who was using it
 
 Either filter can also be set by clicking a row in the table underneath.
+
+![One device selected, so the chart stacks by protocol instead](docs/graphs-device.png)
 
 One device can easily pull a hundred times what the rest of the house does,
 and a stacked chart scaled to it flattens everything else onto the baseline.
@@ -27,6 +31,8 @@ table keeps listing them, greyed out, with their real totals: it reports what
 was recorded, not what is drawn. The choice is remembered in the browser, per
 device and, when a device is selected, per protocol; **show all** above the
 graph clears it.
+
+![The same window with the two busiest devices hidden, so the rest can use the full height](docs/graphs-hidden.png)
 
 The period dropdown holds the usual relative windows, up to the last 30 days,
 and below them one entry per calendar month that retention can still reach. A
@@ -193,7 +199,9 @@ the graph is leaving out.
 ## How this was written
 
 Claude, Anthropic's coding agent, wrote this package: the samplers, the ucode
-backend, the LuCI views, the build script and this README. The maintainer set
+backend, the LuCI views, the build script and this README. The screenshots
+above are the real page rendered against synthetic traffic rather than grabs
+from a live router, so the device names and the numbers in them are invented. The maintainer set
 the direction, reviewed the result and runs it on the target hardware.
 
 `CLAUDE.md` in the repository root is the context the agent works from. It is

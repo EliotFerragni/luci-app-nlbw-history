@@ -37,6 +37,36 @@ There is no test suite. Off-router, what can be checked is shell and JS syntax
 stubbed `nlbw`, and `nlbw-history-query` against synthetic day files.
 `CLAUDE.md` describes both setups.
 
+## Running the view without a router
+
+    python3 tools/preview.py
+
+That puts the LuCI page on `http://127.0.0.1:8099` and is the fastest way to
+work on `main.js`. It writes synthetic history in the format the sampler
+stores, and answers the page's rpc calls by running the real
+`nlbw-history-query` against it, so the device, protocol and period filters
+behave as they do on a router. Nothing about the page is reimplemented: the
+view file runs as-is behind stubs shaped like LuCI's `E`, `rpc`, `uci`, `view`
+and `poll`.
+
+`--days N` decides how much history there is to look at, `--port N` moves it,
+`--time-format` and `--date-format` say what the page is told those settings
+are, and `?device=&protocol=&period=` on the URL preselects a state worth
+returning to. The page reports what it drew, and anything it throws, to the
+terminal, which saves opening devtools.
+
+The README images come from the same script:
+
+    python3 tools/preview.py --screenshots
+
+which writes `docs/*.png` through headless Firefox instead of serving. An image
+that stops matching the code means the code moved.
+
+Needs `python3-pil`, and `firefox` for `--screenshots`; it uses `busybox` for
+awk and date when installed. Every window ends at the current time, so each run
+shifts the clock labels: regenerate the images when the page changed, not out
+of habit.
+
 ## Continuous integration
 
 `.github/workflows/build.yml` has two jobs:

@@ -1,2 +1,3 @@
 *.ipk
 *.tar.gz
+__pycache__/

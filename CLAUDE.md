@@ -17,6 +17,7 @@ iptables/nftables counters or packet inspection.
     package/luci-app-nlbw-history/Makefile          OpenWrt package definition
     package/luci-app-nlbw-history/files/            everything that gets installed
     build-ipk.sh                                    builds the .ipk without an SDK
+    tools/preview.py                                runs the LuCI view with no router
     install.sh                                      installs onto a running router
     README.md                                       user-facing: install, config, troubleshooting
     DEVELOPMENT.md                                  build, CI and release procedure
@@ -127,10 +128,11 @@ There is no test suite. What works:
 - Generate synthetic day files and run `nlbw-history-query` against them to
   check timing, output size and all four filter combinations (no filter,
   device, protocol, both).
-- The chart code can be exercised outside a browser: slice `main.js` from
-  `const PALETTE` to `function renderCharts`, evaluate it in node with a `_`
-  stub, call `chartSVG` with real query output, and rasterize the result to
-  look at it.
+- The whole view runs outside a router: `python3 tools/preview.py` serves the
+  real `main.js` behind LuCI shaped stubs, with its rpc calls answered by the
+  real query script over synthetic history, so the filters work. Same script,
+  `--screenshots`, writes the README images. Smaller pieces can also be
+  evaluated in node directly, since `main.js` is a plain module body.
 
 The two things that cannot be tested here are the ucode backend, which needs
 rpcd, and the LuCI forms, which need a browser. Keep the ucode file small and
