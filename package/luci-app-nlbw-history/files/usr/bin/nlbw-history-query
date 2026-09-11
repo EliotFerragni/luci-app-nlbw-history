@@ -1,7 +1,7 @@
 #!/bin/sh
 # Aggregate the stored samples into a bucketed time series and print JSON.
 #
-#   nlbw-history-query <hours> [buckets] [mac] [protocol] [end]
+#   nlbw-history-query <hours> [buckets] [mac] [protocol] [end] [hide]
 #
 # The window is the <hours> before <end>, an epoch that defaults to now, so a
 # past month can be asked for without widening the window. Reads the
@@ -12,11 +12,18 @@
 #   a device selected     per protocol for that device
 #   a protocol selected   per device for that protocol
 #
+# <hide> is a comma separated list of keys to leave out of the stack, in
+# whichever dimension is being stacked: MACs when that is devices, protocol
+# names when it is protocols. Hidden keys are dropped before the top N is
+# picked, so hiding the one device that dwarfs the rest both rescales the
+# chart and lets a further device up out of "other". They stay in the totals
+# tables, which report what was recorded rather than what is drawn.
+#
 # Output:
 # { "from":…, "to":…, "step":…, "buckets":…, "last_sample":…,
 #   "mode":"devices"|"protocols", "coarse":true|false,
-#   "devices":[ {"mac":…,"name":…,"rx":…,"tx":…,"charted":…} ],
-#   "protocols":[ {"name":…,"rx":…,"tx":…} ],
+#   "devices":[ {"mac":…,"name":…,"rx":…,"tx":…,"charted":…,"hidden":…} ],
+#   "protocols":[ {"name":…,"rx":…,"tx":…,"charted":…,"hidden":…} ],
 #   "series": { "<key|other>": {"rx":[…],"tx":[…]} } }
 
 . /lib/functions.sh
@@ -38,6 +45,9 @@ BUCKETS=${2:-160}
 MAC=$(echo "${3:-}" | tr 'A-Z' 'a-z')
 PROTO=${4:-}
 END=${5:-0}
+# Only ever handed to awk through -v, never to the shell, but keep it to the
+# characters a MAC or a protocol name can contain all the same.
+HIDE=$(printf '%s' "${6:-}" | sed 's/[^0-9A-Za-z._:,+ -]//g')
 
 case "$HOURS" in ''|*[!0-9]*) HOURS=24 ;; esac
 case "$BUCKETS" in ''|*[!0-9]*) BUCKETS=160 ;; esac
@@ -108,7 +118,8 @@ NAMES="$RUN/names.$$"
 } > "$NAMES" 2>/dev/null
 
 awk -F'\t' -v from="$FROM" -v to="$TO" -v nb="$BUCKETS" -v step="$STEP" -v top="$TOP" \
-    -v onlymac="$MAC" -v onlyproto="$PROTO" -v last="$LAST" -v namefile="$NAMES" '
+    -v onlymac="$MAC" -v onlyproto="$PROTO" -v last="$LAST" -v namefile="$NAMES" \
+    -v hidden="$HIDE" '
 BEGIN {
 	while ((getline l < namefile) > 0) {
 		split(l, a, "\t")
@@ -119,6 +130,14 @@ BEGIN {
 	# single device is selected
 	bykey = (onlymac != "" && onlyproto == "") ? "proto" : "mac"
 	coarse = (onlyproto != "" || onlymac != "")
+	nh = split(hidden, hv, ",")
+	for (i = 1; i <= nh; i++) {
+		if (hv[i] == "") continue
+		hide[hv[i]] = 1
+		# MACs are matched lowercased; protocol names are not, so only fold
+		# the entries that can be a MAC in the first place.
+		if (hv[i] ~ /^[0-9A-Fa-f:]+$/) hide[tolower(hv[i])] = 1
+	}
 }
 /^#/ { next }
 {
@@ -135,7 +154,7 @@ NF == 4 {
 		dtot[mac] += $3 + $4; drx[mac] += $3; dtx[mac] += $4
 		seendev[mac] = 1
 	}
-	if (!coarse) {
+	if (!coarse && !(mac in hide)) {
 		RX[mac, b] += $3; TX[mac, b] += $4
 		tot[mac] += $3 + $4; seen[mac] = 1
 	}
@@ -154,6 +173,7 @@ NF == 5 {
 	if (onlymac != "" && mac != onlymac) next
 	if (onlyproto != "" && p != onlyproto) next
 	k = (bykey == "proto") ? p : mac
+	if (k in hide) next
 	RX[k, b] += $4; TX[k, b] += $5
 	tot[k] += $4 + $5; seen[k] = 1
 }
@@ -204,18 +224,20 @@ END {
 	nd = sortkeys(seendev, dord, dtot)
 	for (i = 1; i <= nd; i++) {
 		m = dord[i]
-		printf "%s{\"mac\":\"%s\",\"name\":\"%s\",\"rx\":%.0f,\"tx\":%.0f,\"charted\":%s}", \
+		printf "%s{\"mac\":\"%s\",\"name\":\"%s\",\"rx\":%.0f,\"tx\":%.0f,\"charted\":%s,\"hidden\":%s}", \
 			(i > 1 ? "," : ""), jstr(m), jstr((m in name) ? name[m] : m), drx[m], dtx[m], \
-			((bykey == "mac" && (m in charted)) ? "true" : "false")
+			((bykey == "mac" && (m in charted)) ? "true" : "false"), \
+			((bykey == "mac" && (m in hide)) ? "true" : "false")
 	}
 
 	printf "],\"protocols\":["
 	np = sortkeys(seenproto, pord, ptot)
 	for (i = 1; i <= np; i++) {
 		p = pord[i]
-		printf "%s{\"name\":\"%s\",\"rx\":%.0f,\"tx\":%.0f,\"charted\":%s}", \
+		printf "%s{\"name\":\"%s\",\"rx\":%.0f,\"tx\":%.0f,\"charted\":%s,\"hidden\":%s}", \
 			(i > 1 ? "," : ""), jstr(p), prx[p], ptx[p], \
-			((bykey == "proto" && (p in charted)) ? "true" : "false")
+			((bykey == "proto" && (p in charted)) ? "true" : "false"), \
+			((bykey == "proto" && (p in hide)) ? "true" : "false")
 	}
 
 	printf "],\"series\":{"

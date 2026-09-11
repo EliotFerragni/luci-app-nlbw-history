@@ -17,6 +17,17 @@ any moment. Two filters change what gets stacked:
 
 Either filter can also be set by clicking a row in the table underneath.
 
+One device can easily pull a hundred times what the rest of the house does,
+and a stacked chart scaled to it flattens everything else onto the baseline.
+Untick that device in the **Chart** column of the table, or click its entry in
+the legend, and it drops out of the graph so the remaining bands can use the
+full height. Hidden series are dropped before the top eight are picked, so
+hiding the biggest one also brings a further device up out of *Other*. The
+table keeps listing them, greyed out, with their real totals: it reports what
+was recorded, not what is drawn. The choice is remembered in the browser, per
+device and, when a device is selected, per protocol; **show all** above the
+graph clears it.
+
 The period dropdown holds the usual relative windows, up to the last 30 days,
 and below them one entry per calendar month that retention can still reach. A
 long history is therefore read a month at a time: the window never gets wider
@@ -153,6 +164,10 @@ The aggregation is also runnable on its own, which is the quickest way to see
 whether the problem is the data or the display:
 
     nlbw-history-query 24 20
+
+Its full argument list is `<hours> [buckets] [mac] [protocol] [end] [hide]`,
+where `hide` is the comma separated list of MACs, or of protocol names, that
+the graph is leaving out.
 
 ## Installed files
 

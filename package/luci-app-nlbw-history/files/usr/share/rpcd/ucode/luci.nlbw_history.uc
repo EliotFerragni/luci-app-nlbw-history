@@ -43,7 +43,19 @@ function series(req) {
 	if (length(proto) > 40)
 		proto = substr(proto, 0, 40);
 
-	let out = run(`${QUERY} ${hours} ${buckets} '${mac}' '${proto}' ${end} 2>/dev/null`);
+	// Keys the chart should leave out, comma separated: MACs or protocol
+	// names, so the same character set as above minus the separator itself.
+	let hide = replace('' + (args.hide || ''), /[^0-9A-Za-z._:,+ -]/g, '');
+
+	// Cap the list rather than drop it: charting a series the user hid is more
+	// surprising than leaving the tail of an absurdly long list hidden.
+	if (length(hide) > 512) {
+		hide = substr(hide, 0, 512);
+		let cut = rindex(hide, ',');
+		hide = (cut > 0) ? substr(hide, 0, cut) : '';
+	}
+
+	let out = run(`${QUERY} ${hours} ${buckets} '${mac}' '${proto}' ${end} '${hide}' 2>/dev/null`);
 	let data = null;
 
 	try { data = json(out); } catch (e) { data = null; }
@@ -70,7 +82,7 @@ function status() {
 return {
 	luci_nlbw_history: {
 		series: {
-			args: { hours: 24, buckets: 160, mac: '', protocol: '', end: 0 },
+			args: { hours: 24, buckets: 160, mac: '', protocol: '', end: 0, hide: '' },
 			call: series
 		},
 		status: {

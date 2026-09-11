@@ -6,7 +6,7 @@
 const callSeries = rpc.declare({
 	object: 'luci_nlbw_history',
 	method: 'series',
-	params: [ 'hours', 'buckets', 'mac', 'protocol', 'end' ]
+	params: [ 'hours', 'buckets', 'mac', 'protocol', 'end', 'hide' ]
 });
 
 const callStatus = rpc.declare({
@@ -33,6 +33,47 @@ function loadUnits() {
 function saveUnits(v) {
 	UNITS = v;
 	try { window.localStorage.setItem('nlbw-history.units', v); } catch (e) {}
+}
+
+// Series taken out of the stack so the rest can use the full height of the
+// chart, because one device pulling a hundred times what the others do
+// flattens them all into the baseline. Kept per stacked dimension: MACs when
+// devices are stacked, protocol names when protocols are. It is a display
+// choice, so it lives in the browser and not in the router's config.
+let hidden = { devices: {}, protocols: {} };
+
+function loadHidden() {
+	hidden = { devices: {}, protocols: {} };
+	let raw = null;
+	try { raw = window.localStorage.getItem('nlbw-history.hidden'); } catch (e) { return; }
+	if (!raw) return;
+	try {
+		const o = JSON.parse(raw) || {};
+		[ 'devices', 'protocols' ].forEach(function(dim) {
+			for (let k of o[dim] || [])
+				if (typeof k === 'string' && k !== '') hidden[dim][k] = true;
+		});
+	} catch (e) {}
+}
+
+function saveHidden() {
+	try {
+		window.localStorage.setItem('nlbw-history.hidden', JSON.stringify({
+			devices: Object.keys(hidden.devices),
+			protocols: Object.keys(hidden.protocols)
+		}));
+	} catch (e) {}
+}
+
+// Which dimension the chart stacks, and so which hidden set applies. The
+// backend decides the same way: protocols when a single device is selected,
+// devices otherwise.
+function dimOf(data) {
+	return (data && data.mode === 'protocols') ? 'protocols' : 'devices';
+}
+
+function hideParam(mac, protocol) {
+	return Object.keys(hidden[(mac && !protocol) ? 'protocols' : 'devices']).join(',');
 }
 
 // Resolved per request rather than when the period is picked, so the current
@@ -186,11 +227,18 @@ function keyLabel(data, key) {
 	return key;
 }
 
-function renderCharts(node, data) {
-	const keys = Object.keys(data.series || {});
+function renderCharts(node, data, onToggle) {
+	const dim = dimOf(data);
+	// The backend already leaves hidden keys out of the series, and drops them
+	// before picking the top N so a further one can come up out of "other".
+	// Filtering again here is what makes a click rescale the chart at once,
+	// without waiting for the refreshed series to come back.
+	const keys = Object.keys(data.series || {}).filter(function(k) { return !hidden[dim][k]; });
 	if (!keys.length) {
 		node.innerHTML = '';
-		node.appendChild(E('p', {}, _('No traffic recorded in this period yet.')));
+		node.appendChild(E('p', {}, Object.keys(hidden[dim]).length
+			? _('Everything in this period is hidden. Tick a row in the table below to bring it back.')
+			: _('No traffic recorded in this period yet.')));
 		return;
 	}
 
@@ -212,17 +260,27 @@ function renderCharts(node, data) {
 
 	const legend = E('div', { style: 'display:flex;flex-wrap:wrap;gap:6px 18px;padding:8px 0 2px;font-size:13px' });
 	keys.forEach(function(k, i) {
-		legend.appendChild(E('span', { style: 'display:flex;align-items:center;gap:6px' }, [
+		// "other" is an aggregate with no stable key behind it, so it is the
+		// one band that cannot be hidden on its own.
+		const clickable = (k !== 'other');
+		const item = E('span', {
+			style: 'display:flex;align-items:center;gap:6px' + (clickable ? ';cursor:pointer' : ''),
+			title: clickable ? _('Hide from the chart') : ''
+		}, [
 			E('i', { style: 'width:11px;height:11px;border-radius:2px;background:' + colors[i] }),
 			labels[i]
-		]));
+		]);
+		if (clickable)
+			item.addEventListener('click', function() { onToggle(k); });
+		legend.appendChild(item);
 	});
 	node.appendChild(legend);
 }
 
-function renderTable(node, data, onPick) {
+function renderTable(node, data, onPick, onToggle) {
 	node.innerHTML = '';
 
+	const dim = dimOf(data);
 	const proto = data.mode === 'protocols';
 	const rows = (proto ? data.protocols : data.devices) || [];
 	if (!rows.length)
@@ -230,6 +288,7 @@ function renderTable(node, data, onPick) {
 
 	const top = rows[0].rx + rows[0].tx || 1;
 	const out = [ E('tr', { 'class': 'tr table-titles' }, [
+		E('th', { 'class': 'th', style: 'width:1px;white-space:nowrap' }, _('Chart')),
 		E('th', { 'class': 'th' }, proto ? _('Protocol') : _('Device')),
 		E('th', { 'class': 'th', style: 'text-align:right' }, _('Download')),
 		E('th', { 'class': 'th', style: 'text-align:right' }, _('Upload')),
@@ -241,8 +300,18 @@ function renderTable(node, data, onPick) {
 	for (let r of rows) {
 		const key = proto ? r.name : r.mac;
 		const total = r.rx + r.tx;
+		const off = !!hidden[dim][key];
 		const color = r.charted ? PALETTE[(i++) % PALETTE.length] : OTHER_COLOR;
-		out.push(E('tr', { 'class': 'tr' }, [
+		// Set as a property rather than an attribute: LuCI's E() would put a
+		// literal checked="false" on the node, which still checks the box.
+		const box = E('input', {
+			type: 'checkbox',
+			title: off ? _('Show this in the chart') : _('Hide this from the chart'),
+			change: function() { onToggle(key); }
+		});
+		box.checked = !off;
+		out.push(E('tr', Object.assign({ 'class': 'tr' }, off ? { style: 'opacity:0.55' } : {}), [
+			E('td', { 'class': 'td', style: 'width:1px' }, box),
 			E('td', { 'class': 'td' }, [
 				E('a', {
 					href: '#',
@@ -265,9 +334,13 @@ function renderTable(node, data, onPick) {
 
 return view.extend({
 	load: function() {
+		// Loaded before the first request so a series hidden in an earlier
+		// visit is already left out of the very first chart.
+		loadHidden();
 		return Promise.all([
 			callStatus().catch(function() { return null; }),
-			callSeries(24, 160, '', '', 0).catch(function(e) { return { error: '' + e }; })
+			callSeries(24, 160, '', '', 0, hideParam('', ''))
+				.catch(function(e) { return { error: '' + e }; })
 		]);
 	},
 
@@ -302,6 +375,7 @@ return view.extend({
 
 		const chartNode = E('div', {});
 		const tableNode = E('div', {});
+		const hiddenNode = E('div', { style: 'font-size:13px;margin-top:8px' });
 		const statusNode = E('div', { style: 'font-size:13px;opacity:0.75;margin-top:8px' });
 		const errorNode = E('div', { 'class': 'alert-message warning', style: 'display:none' });
 
@@ -320,6 +394,39 @@ return view.extend({
 			sel.value = current;
 		}
 
+		// Repaint at once from the data already loaded, so the chart rescales
+		// on the click, then refetch: the backend picks the top N among what
+		// is left, which can bring a further series up out of "other".
+		function toggleHidden(key) {
+			const dim = dimOf(state.data);
+			if (hidden[dim][key]) delete hidden[dim][key];
+			else hidden[dim][key] = true;
+			saveHidden();
+			paint();
+			refresh();
+		}
+
+		function renderHidden(data) {
+			const dim = dimOf(data);
+			const keys = Object.keys(hidden[dim]);
+			hiddenNode.innerHTML = '';
+			if (!keys.length)
+				return;
+			hiddenNode.appendChild(E('span', { style: 'opacity:0.75' },
+				(dim === 'protocols' ? _('Hidden protocols') : _('Hidden devices')) + ': ' +
+				keys.map(function(k) { return keyLabel(data, k); }).join(', ') + ' \u2014 '));
+			hiddenNode.appendChild(E('a', {
+				href: '#',
+				click: function(ev) {
+					ev.preventDefault();
+					hidden[dim] = {};
+					saveHidden();
+					paint();
+					refresh();
+				}
+			}, _('show all')));
+		}
+
 		function paint() {
 			const data = state.data;
 			if (!data || data.error) {
@@ -327,6 +434,7 @@ return view.extend({
 				errorNode.textContent = (data && data.error) || _('No data returned.');
 				chartNode.innerHTML = '';
 				tableNode.innerHTML = '';
+				hiddenNode.innerHTML = '';
 				return;
 			}
 			errorNode.style.display = 'none';
@@ -338,12 +446,13 @@ return view.extend({
 				function(p) { return p.name; },
 				function(p) { return p.name; });
 
-			renderCharts(chartNode, data);
+			renderCharts(chartNode, data, toggleHidden);
 			renderTable(tableNode, data, function(key) {
 				if (data.mode === 'protocols') state.protocol = key;
 				else state.mac = key;
 				refresh();
-			});
+			}, toggleHidden);
+			renderHidden(data);
 
 			const st = (state.status && state.status.status) || {};
 			const age = data.last_sample ? Math.max(0, Math.round(Date.now() / 1000) - data.last_sample) : null;
@@ -367,7 +476,8 @@ return view.extend({
 					.catch(function() {});
 			return Promise.all([
 				callStatus().catch(function() { return state.status; }),
-				callSeries(w.hours, 160, state.mac, state.protocol, w.end)
+				callSeries(w.hours, 160, state.mac, state.protocol, w.end,
+					hideParam(state.mac, state.protocol))
 					.catch(function(e) { return { error: '' + e }; })
 			]).then(function(r) {
 				state.status = r[0];
@@ -402,7 +512,8 @@ return view.extend({
 					E('label', {}, _('Units')), unitsSel
 				]),
 				E('p', { 'class': 'cbi-section-descr', style: 'margin:8px 0 0' },
-					_('Pick a device to see what it was doing, or a protocol to see who was using it.')),
+					_('Pick a device to see what it was doing, or a protocol to see who was using it. Untick a row in the table, or click a legend entry, to drop it from the chart so the rest can use the full height.')),
+				hiddenNode,
 				statusNode,
 				errorNode
 			]),
