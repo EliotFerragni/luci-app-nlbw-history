@@ -99,9 +99,11 @@ is requested so the bars stay contiguous rather than leaving gaps.
 ## Conventions
 
 - Bump `PKG_VERSION` in the package Makefile for any user-visible change, and
-  add a matching entry under "What changed" in the README. `DEVELOPMENT.md`
-  has the full release procedure; releasing is publishing a GitHub release,
-  which is the only thing that builds and attaches the `.ipk`.
+  update the version in the README title and install commands to match. There
+  is no changelog in the repository: what changed goes in the GitHub release
+  notes. `DEVELOPMENT.md` has the full release procedure; releasing is
+  publishing a GitHub release, which is the only thing that builds and
+  attaches the `.ipk`.
 - Documentation is split by audience: anything a user of the package needs
   goes in `README.md`, anything only a contributor needs goes in
   `DEVELOPMENT.md`. Keep the README's troubleshooting section accurate, since

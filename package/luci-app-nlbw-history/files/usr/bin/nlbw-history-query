@@ -1,10 +1,12 @@
 #!/bin/sh
 # Aggregate the stored samples into a bucketed time series and print JSON.
 #
-#   nlbw-history-query <hours> [buckets] [mac] [protocol]
+#   nlbw-history-query <hours> [buckets] [mac] [protocol] [end]
 #
-# Reads the persistent day files plus the not yet flushed RAM spools, so the
-# most recent samples always show up. What gets stacked depends on the filters:
+# The window is the <hours> before <end>, an epoch that defaults to now, so a
+# past month can be asked for without widening the window. Reads the
+# persistent day files plus the not yet flushed RAM spools, so the most recent
+# samples always show up. What gets stacked depends on the filters:
 #
 #   no filters            per device, at full sampling resolution
 #   a device selected     per protocol for that device
@@ -32,11 +34,14 @@ HOURS=${1:-24}
 BUCKETS=${2:-160}
 MAC=$(echo "${3:-}" | tr 'A-Z' 'a-z')
 PROTO=${4:-}
+END=${5:-0}
 
 case "$HOURS" in ''|*[!0-9]*) HOURS=24 ;; esac
 case "$BUCKETS" in ''|*[!0-9]*) BUCKETS=160 ;; esac
+case "$END" in ''|*[!0-9]*) END=0 ;; esac
 [ "$HOURS" -lt 1 ] && HOURS=1
-[ "$HOURS" -gt 720 ] && HOURS=720
+# 768 hours is 32 days, enough for a whole calendar month in one window.
+[ "$HOURS" -gt 768 ] && HOURS=768
 [ "$BUCKETS" -lt 10 ] && BUCKETS=10
 [ "$BUCKETS" -gt 400 ] && BUCKETS=400
 case "$MAC" in
@@ -54,7 +59,9 @@ if [ -n "$MAC" ] || [ -n "$PROTO" ]; then
 fi
 
 NOW=$(date +%s)
-FROM=$((NOW - HOURS * 3600))
+TO=$END
+[ "$TO" -le 0 ] && TO=$NOW
+FROM=$((TO - HOURS * 3600))
 LAST=$(cat "$RUN/lastsample" 2>/dev/null)
 case "$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
 
@@ -64,8 +71,9 @@ day_of() { date -D %s -d "$1" +%Y-%m-%d 2>/dev/null || date -d "@$1" +%Y-%m-%d; 
 # fields, protocol rows 5, so both sets can be read in a single pass.
 FILES=""
 d=$FROM
-while [ "$d" -le $((NOW + 86400)) ]; do
-	for f in "$DATA_DIR/$(day_of "$d").tsv" "$DATA_DIR/$(day_of "$d").proto.tsv"; do
+while [ "$d" -le $((TO + 86400)) ]; do
+	day=$(day_of "$d")
+	for f in "$DATA_DIR/$day.tsv" "$DATA_DIR/$day.proto.tsv"; do
 		[ -f "$f" ] && FILES="$FILES $f"
 	done
 	d=$((d + 86400))
@@ -88,10 +96,10 @@ NAMES="$RUN/names.$$"
 	[ -f /tmp/dhcp.leases ] && awk '$4 != "*" && $4 != "" { print tolower($2) "\t" $4 }' /tmp/dhcp.leases
 } > "$NAMES" 2>/dev/null
 
-awk -F'\t' -v from="$FROM" -v now="$NOW" -v nb="$BUCKETS" -v top="$TOP" \
+awk -F'\t' -v from="$FROM" -v to="$TO" -v nb="$BUCKETS" -v top="$TOP" \
     -v onlymac="$MAC" -v onlyproto="$PROTO" -v last="$LAST" -v namefile="$NAMES" '
 BEGIN {
-	step = int((now - from) / nb)
+	step = int((to - from) / nb)
 	if (step < 1) step = 1
 	while ((getline l < namefile) > 0) {
 		split(l, a, "\t")
@@ -106,7 +114,7 @@ BEGIN {
 /^#/ { next }
 {
 	ts = $1 + 0
-	if (ts < from || ts > now) next
+	if (ts < from || ts > to) next
 	b = int((ts - from) / step)
 	if (b < 0) b = 0
 	if (b >= nb) b = nb - 1
@@ -179,7 +187,7 @@ END {
 	for (i = 1; i <= nshow; i++) charted[ord[i]] = 1
 
 	printf "{\"from\":%d,\"to\":%d,\"step\":%d,\"buckets\":%d,\"last_sample\":%d,", \
-		from, now, step, nb, last
+		from, to, step, nb, last
 	printf "\"mode\":\"%s\",\"coarse\":%s,", \
 		(bykey == "proto" ? "protocols" : "devices"), (coarse ? "true" : "false")
 

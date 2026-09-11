@@ -18,8 +18,8 @@ return view.extend({
 		let m, s, o;
 
 		m = new form.Map('nlbw-history', _('Bandwidth History'),
-			_('Settings for the sampler behind Status → Bandwidth History. ' +
-			  'It reads nlbwmon\'s counters only and does not touch flow offloading.'));
+			_('Settings for the sampler behind Services → Bandwidth History. ' +
+			  'It reads nlbwmon\'s counters only.'));
 
 		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Current state'));
 		s.anonymous = true;

@@ -17,6 +17,11 @@ any moment. Two filters change what gets stacked:
 
 Either filter can also be set by clicking a row in the table underneath.
 
+The period dropdown holds the usual relative windows, up to the last 30 days,
+and below them one entry per calendar month that retention can still reach. A
+long history is therefore read a month at a time: the window never gets wider
+than about a month, which is what keeps a query affordable on a router.
+
 Working on it rather than running it? See [DEVELOPMENT.md](DEVELOPMENT.md)
 for the build, the CI and the release procedure.
 
@@ -63,7 +68,7 @@ The same options live in `/etc/config/nlbw-history` if you prefer the shell:
 | option | default | meaning |
 | --- | --- | --- |
 | `period` | `60` | seconds between samples; this is your graph resolution |
-| `retention` | `30` | days of history to keep |
+| `retention` | `30` | days of history to keep; browsed a month at a time |
 | `flush_interval` | `600` | how often the RAM buffer is written to `data_dir` |
 | `data_dir` | `/srv/nlbw-history` | where history is stored; **must be persistent** |
 | `protocols` | `1` | also record per-protocol traffic |

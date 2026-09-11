@@ -6,7 +6,7 @@
 const callSeries = rpc.declare({
 	object: 'luci_nlbw_history',
 	method: 'series',
-	params: [ 'hours', 'buckets', 'mac', 'protocol' ]
+	params: [ 'hours', 'buckets', 'mac', 'protocol', 'end' ]
 });
 
 const callStatus = rpc.declare({
@@ -18,7 +18,8 @@ const PALETTE = [ '#3d6fb4', '#d98032', '#4e9e6a', '#c2504f', '#7a6bab',
                   '#3aa3a8', '#b4699b', '#8a7f6d' ];
 const OTHER_COLOR = '#9aa3ac';
 
-let state = { mac: '', protocol: '', hours: 24, data: null, status: null };
+// range is either { hours: n } ending now, or a calendar month { year, month }.
+let state = { mac: '', protocol: '', range: { hours: 24 }, data: null, status: null };
 
 // 'si' counts in thousands and prints MB, 'iec' counts in 1024s and prints MiB.
 let UNITS = 'si';
@@ -32,6 +33,33 @@ function loadUnits() {
 function saveUnits(v) {
 	UNITS = v;
 	try { window.localStorage.setItem('nlbw-history.units', v); } catch (e) {}
+}
+
+// Resolved per request rather than when the period is picked, so the current
+// month keeps following the clock as the page polls.
+function rangeWindow(r) {
+	if (!r.year)
+		return { hours: r.hours, end: 0 };
+	const start = Math.floor(new Date(r.year, r.month - 1, 1).getTime() / 1000);
+	const next = Math.floor(new Date(r.year, r.month, 1).getTime() / 1000);
+	// The backend takes a whole number of hours before the end of the window,
+	// so the end is rounded up to the hour to keep the start on the 1st.
+	const end = Math.min(next, Math.ceil(Date.now() / 3600000) * 3600);
+	return { hours: Math.max(1, Math.round((end - start) / 3600)), end: end };
+}
+
+// The months that retention can still hold anything for, newest first.
+function monthOptions(days) {
+	const now = new Date();
+	const out = [];
+	for (let i = 0; i < Math.min(14, Math.ceil(days / 28) + 1); i++) {
+		const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+		if (i > 0 && (now - d) / 86400000 > days + 31)
+			break;
+		out.push({ value: 'm' + d.getFullYear() + '-' + (d.getMonth() + 1),
+		           label: d.toLocaleDateString([], { month: 'long', year: 'numeric' }) });
+	}
+	return out;
 }
 
 function esc(s) {
@@ -239,7 +267,7 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			callStatus().catch(function() { return null; }),
-			callSeries(24, 160, '', '').catch(function(e) { return { error: '' + e }; })
+			callSeries(24, 160, '', '', 0).catch(function(e) { return { error: '' + e }; })
 		]);
 	},
 
@@ -250,7 +278,7 @@ return view.extend({
 
 		const deviceSel = E('select', { 'class': 'cbi-input-select', style: 'min-width:240px;margin-right:12px' });
 		const protoSel = E('select', { 'class': 'cbi-input-select', style: 'min-width:140px;margin-right:12px' });
-		const hoursSel = E('select', { 'class': 'cbi-input-select', style: 'margin-right:12px' });
+		const rangeSel = E('select', { 'class': 'cbi-input-select', style: 'margin-right:12px' });
 		const unitsSel = E('select', { 'class': 'cbi-input-select' }, [
 			E('option', Object.assign({ value: 'si' }, UNITS === 'si' ? { selected: 'selected' } : {}),
 				_('MB (1000 bytes per kB)')),
@@ -261,9 +289,16 @@ return view.extend({
 		[ [ 1, _('Last hour') ], [ 6, _('Last 6 hours') ], [ 24, _('Last 24 hours') ],
 		  [ 72, _('Last 3 days') ], [ 168, _('Last 7 days') ], [ 720, _('Last 30 days') ] ]
 			.forEach(function(o) {
-				hoursSel.appendChild(E('option', Object.assign({ value: o[0] },
-					o[0] === state.hours ? { selected: 'selected' } : {}), o[1]));
+				rangeSel.appendChild(E('option', Object.assign({ value: 'h' + o[0] },
+					o[0] === state.range.hours ? { selected: 'selected' } : {}), o[1]));
 			});
+
+		// A whole month is at most 32 days of samples to read, so browsing back
+		// through a long retention costs no more than the 30 day view does.
+		const months = monthOptions(parseInt(((state.status && state.status.status) || {})['retention'], 10) || 30);
+		if (months.length)
+			rangeSel.appendChild(E('optgroup', { label: _('Calendar month') },
+				months.map(function(m) { return E('option', { value: m.value }, m.label); })));
 
 		const chartNode = E('div', {});
 		const tableNode = E('div', {});
@@ -322,10 +357,17 @@ return view.extend({
 			statusNode.textContent = bits.join(' \u2014 ');
 		}
 
-		function refresh() {
+		function refresh(polled) {
+			const w = rangeWindow(state.range);
+			// A month that is over cannot gain samples, and aggregating one is
+			// the most expensive thing the router does here, so the timer only
+			// refreshes the status line once the window has closed.
+			if (polled && w.end && w.end <= Date.now() / 1000 && state.data && !state.data.error)
+				return callStatus().then(function(st) { state.status = st; paint(); })
+					.catch(function() {});
 			return Promise.all([
 				callStatus().catch(function() { return state.status; }),
-				callSeries(state.hours, 160, state.mac, state.protocol)
+				callSeries(w.hours, 160, state.mac, state.protocol, w.end)
 					.catch(function(e) { return { error: '' + e }; })
 			]).then(function(r) {
 				state.status = r[0];
@@ -336,11 +378,19 @@ return view.extend({
 
 		deviceSel.addEventListener('change', function() { state.mac = deviceSel.value; refresh(); });
 		protoSel.addEventListener('change', function() { state.protocol = protoSel.value; refresh(); });
-		hoursSel.addEventListener('change', function() { state.hours = +hoursSel.value; refresh(); });
+		rangeSel.addEventListener('change', function() {
+			const v = rangeSel.value;
+			if (v.charAt(0) === 'm') {
+				const p = v.substring(1).split('-');
+				state.range = { year: +p[0], month: +p[1] };
+			}
+			else state.range = { hours: +v.substring(1) };
+			refresh();
+		});
 		// Units are a display choice, so nothing has to be fetched again.
 		unitsSel.addEventListener('change', function() { saveUnits(unitsSel.value); paint(); });
 
-		poll.add(refresh, 60);
+		poll.add(function() { return refresh(true); }, 60);
 
 		const body = E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('Bandwidth History')),
@@ -348,7 +398,7 @@ return view.extend({
 				E('div', { style: 'display:flex;flex-wrap:wrap;align-items:center;gap:6px' }, [
 					E('label', {}, _('Device')), deviceSel,
 					E('label', {}, _('Protocol')), protoSel,
-					E('label', {}, _('Period')), hoursSel,
+					E('label', {}, _('Period')), rangeSel,
 					E('label', {}, _('Units')), unitsSel
 				]),
 				E('p', { 'class': 'cbi-section-descr', style: 'margin:8px 0 0' },
