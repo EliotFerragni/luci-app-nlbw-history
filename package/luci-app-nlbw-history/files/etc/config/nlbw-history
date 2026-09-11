@@ -14,3 +14,7 @@ config nlbw_history 'main'
 	# Protocol traffic is aggregated into buckets this many seconds wide,
 	# because the protocol dimension multiplies the number of rows stored.
 	option protocol_interval '900'
+	# Display only. auto follows the browser's locale; 24 or 12 force the
+	# clock, dmy prints 31/12 and mdy prints 12/31.
+	option time_format 'auto'
+	option date_format 'auto'

@@ -2,6 +2,7 @@
 'require view';
 'require rpc';
 'require poll';
+'require uci';
 
 const callSeries = rpc.declare({
 	object: 'luci_nlbw_history',
@@ -23,6 +24,31 @@ let state = { mac: '', protocol: '', range: { hours: 24 }, data: null, status: n
 
 // 'si' counts in thousands and prints MB, 'iec' counts in 1024s and prints MiB.
 let UNITS = 'si';
+
+// Clock and date order, from the router's config. 'auto' leaves both to the
+// browser's locale, which is what a fresh install does.
+let FORMATS = { time: 'auto', date: 'auto' };
+
+function loadFormats() {
+	let t, d;
+	try {
+		t = uci.get('nlbw-history', 'main', 'time_format');
+		d = uci.get('nlbw-history', 'main', 'date_format');
+	}
+	catch (e) {}
+	FORMATS = {
+		time: (t === '12' || t === '24') ? t : 'auto',
+		date: (d === 'dmy' || d === 'mdy') ? d : 'auto'
+	};
+}
+
+// hourCycle rather than hour12:false, which renders midnight as 24:00 in a
+// few locales.
+function clockOpts(opts) {
+	if (FORMATS.time === '12') return Object.assign({ hour12: true }, opts);
+	if (FORMATS.time === '24') return Object.assign({ hourCycle: 'h23' }, opts);
+	return opts;
+}
 
 function loadUnits() {
 	try { UNITS = window.localStorage.getItem('nlbw-history.units') || 'si'; }
@@ -127,12 +153,20 @@ function fmtRate(bps) {
 	return (bps / 1e9).toFixed(2) + ' Gbit/s';
 }
 
+function fmtDayMonth(d) {
+	const dd = ('0' + d.getDate()).slice(-2);
+	const mm = ('0' + (d.getMonth() + 1)).slice(-2);
+	if (FORMATS.date === 'dmy') return dd + '/' + mm;
+	if (FORMATS.date === 'mdy') return mm + '/' + dd;
+	return d.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+}
+
 function fmtTime(ts, span) {
 	const d = new Date(ts * 1000);
 	if (span <= 48 * 3600)
-		return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-	return d.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ' ' +
-	       d.toLocaleTimeString([], { hour: '2-digit' });
+		return d.toLocaleTimeString([], clockOpts({ hour: '2-digit', minute: '2-digit' }));
+	return fmtDayMonth(d) + ' ' +
+	       d.toLocaleTimeString([], clockOpts({ hour: '2-digit' }));
 }
 
 function niceMax(v) {
@@ -340,7 +374,10 @@ return view.extend({
 		return Promise.all([
 			callStatus().catch(function() { return null; }),
 			callSeries(24, 160, '', '', 0, hideParam('', ''))
-				.catch(function(e) { return { error: '' + e }; })
+				.catch(function(e) { return { error: '' + e }; }),
+			// Display formats live in the router's config; the graphs fall back
+			// to the browser's locale if it cannot be read.
+			uci.load('nlbw-history').catch(function() {})
 		]);
 	},
 
@@ -348,6 +385,7 @@ return view.extend({
 		state.status = res[0];
 		state.data = res[1];
 		loadUnits();
+		loadFormats();
 
 		const deviceSel = E('select', { 'class': 'cbi-input-select', style: 'min-width:240px' });
 		const protoSel = E('select', { 'class': 'cbi-input-select', style: 'min-width:140px' });

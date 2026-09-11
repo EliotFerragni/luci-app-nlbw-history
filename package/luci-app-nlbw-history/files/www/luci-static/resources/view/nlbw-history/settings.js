@@ -90,6 +90,24 @@ return view.extend({
 		o.value('1800', _('30 minutes'));
 		o.value('3600', _('1 hour'));
 
+		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Display'));
+		s.anonymous = true;
+		s.addremove = false;
+
+		o = s.option(form.ListValue, 'time_format', _('Clock'),
+			_('How the graphs print times. Automatic follows the browser the page is open in.'));
+		o.value('auto', _('Automatic'));
+		o.value('24', _('24 hour (14:05)'));
+		o.value('12', _('12 hour (2:05 PM)'));
+		o.default = 'auto';
+
+		o = s.option(form.ListValue, 'date_format', _('Date order'),
+			_('How the graphs print dates. Automatic follows the browser the page is open in.'));
+		o.value('auto', _('Automatic'));
+		o.value('dmy', _('Day first (31/12)'));
+		o.value('mdy', _('Month first (12/31)'));
+		o.default = 'auto';
+
 		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Protocols'));
 		s.anonymous = true;
 		s.addremove = false;

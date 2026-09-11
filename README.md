@@ -74,6 +74,10 @@ Everything is editable under **Services → Bandwidth History → Settings**, wh
 also shows whether the sampler is alive, when it last ran and how much history
 is on disk. Save & Apply reloads the service for you.
 
+The last two options are display only: `auto` leaves the clock and the date
+order to whatever browser the page is open in, which is usually right, and the
+other values override it for everyone looking at this router.
+
 The same options live in `/etc/config/nlbw-history` if you prefer the shell:
 
 | option | default | meaning |
@@ -84,6 +88,8 @@ The same options live in `/etc/config/nlbw-history` if you prefer the shell:
 | `data_dir` | `/srv/nlbw-history` | where history is stored; **must be persistent** |
 | `protocols` | `1` | also record per-protocol traffic |
 | `protocol_interval` | `900` | seconds per stored protocol bucket |
+| `time_format` | `auto` | clock on the graphs: `auto`, `24` or `12` |
+| `date_format` | `auto` | date order on the graphs: `auto`, `dmy` or `mdy` |
 
     uci set nlbw-history.main.period='30'
     uci commit nlbw-history

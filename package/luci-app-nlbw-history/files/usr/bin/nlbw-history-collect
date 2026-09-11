@@ -24,6 +24,8 @@ config_get RETENTION main retention 30
 config_get FLUSH_INTERVAL main flush_interval 600
 config_get PROTOCOLS main protocols 1
 config_get PROTO_INTERVAL main protocol_interval 900
+config_get TIME_FORMAT main time_format auto
+config_get DATE_FORMAT main date_format auto
 
 case "$RETENTION" in ''|*[!0-9]*) RETENTION=30 ;; esac
 case "$FLUSH_INTERVAL" in ''|*[!0-9]*) FLUSH_INTERVAL=600 ;; esac
@@ -50,6 +52,21 @@ BUCKET=$((NOW - NOW % PROTO_INTERVAL))
 day_of() {
 	# epoch -> YYYY-MM-DD, busybox and GNU date
 	date -D %s -d "$1" +%Y-%m-%d 2>/dev/null || date -d "@$1" +%Y-%m-%d
+}
+
+# epoch -> a stamp in the configured order. auto is ISO, which is the one
+# order nobody misreads.
+stamp() {
+	case "$DATE_FORMAT" in
+		dmy) _d="%d/%m/%Y" ;;
+		mdy) _d="%m/%d/%Y" ;;
+		*)   _d="%Y-%m-%d" ;;
+	esac
+	case "$TIME_FORMAT" in
+		12) _t="%I:%M:%S %p" ;;
+		*)  _t="%H:%M:%S" ;;
+	esac
+	date -D %s -d "$1" "+$_d $_t" 2>/dev/null || date -d "@$1" "+$_d $_t"
 }
 
 # $1 spool file, $2 file suffix, $3 aggregate (1 = sum rows with the same key)
@@ -113,7 +130,7 @@ status() {
 	fi
 	if [ -s "$LASTSAMPLE" ]; then
 		last=$(cat "$LASTSAMPLE")
-		echo "last sample:     $(date -D %s -d "$last" 2>/dev/null || date -d "@$last") ($((NOW - last))s ago)"
+		echo "last sample:     $(stamp "$last") ($((NOW - last))s ago)"
 	else
 		echo "last sample:     never"
 	fi
