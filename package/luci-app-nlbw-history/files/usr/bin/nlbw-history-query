@@ -23,8 +23,11 @@
 
 config_load nlbw-history
 config_get DATA_DIR main data_dir /srv/nlbw-history
+config_get PERIOD main period 60
 config_get PROTO_INTERVAL main protocol_interval 900
+case "$PERIOD" in ''|*[!0-9]*) PERIOD=60 ;; esac
 case "$PROTO_INTERVAL" in ''|*[!0-9]*) PROTO_INTERVAL=900 ;; esac
+[ "$PERIOD" -lt 1 ] && PERIOD=1
 [ "$PROTO_INTERVAL" -lt 60 ] && PROTO_INTERVAL=60
 
 RUN=/tmp/nlbw-history
@@ -50,18 +53,26 @@ case "$MAC" in
 	* ) MAC='' ;;
 esac
 
-# Protocol data is stored in protocol_interval buckets, so asking for finer
-# buckets than that would just leave gaps between the bars.
-if [ -n "$MAC" ] || [ -n "$PROTO" ]; then
-	MAXB=$((HOURS * 3600 / PROTO_INTERVAL))
-	[ "$MAXB" -lt 10 ] && MAXB=10
-	[ "$BUCKETS" -gt "$MAXB" ] && BUCKETS=$MAXB
-fi
-
 NOW=$(date +%s)
 TO=$END
 [ "$TO" -le 0 ] && TO=$NOW
-FROM=$((TO - HOURS * 3600))
+SPAN=$((HOURS * 3600))
+
+# Samples sit on a grid: device rows every period seconds, protocol rows every
+# protocol_interval. A bucket narrower than that grid is empty most of the
+# time, and one that is not a whole number of grid steps wide holds a different
+# number of samples than its neighbour. Both read as ragged bars, so the
+# requested bucket count is only an upper bound: the step is rounded up to the
+# grid and the count follows from it.
+GRAIN=$PERIOD
+if [ -n "$MAC" ] || [ -n "$PROTO" ]; then
+	GRAIN=$PROTO_INTERVAL
+fi
+STEP=$(( (SPAN + BUCKETS - 1) / BUCKETS ))
+STEP=$(( (STEP + GRAIN - 1) / GRAIN * GRAIN ))
+BUCKETS=$((SPAN / STEP))
+[ "$BUCKETS" -lt 1 ] && BUCKETS=1
+FROM=$((TO - BUCKETS * STEP))
 LAST=$(cat "$RUN/lastsample" 2>/dev/null)
 case "$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
 
@@ -96,11 +107,9 @@ NAMES="$RUN/names.$$"
 	[ -f /tmp/dhcp.leases ] && awk '$4 != "*" && $4 != "" { print tolower($2) "\t" $4 }' /tmp/dhcp.leases
 } > "$NAMES" 2>/dev/null
 
-awk -F'\t' -v from="$FROM" -v to="$TO" -v nb="$BUCKETS" -v top="$TOP" \
+awk -F'\t' -v from="$FROM" -v to="$TO" -v nb="$BUCKETS" -v step="$STEP" -v top="$TOP" \
     -v onlymac="$MAC" -v onlyproto="$PROTO" -v last="$LAST" -v namefile="$NAMES" '
 BEGIN {
-	step = int((to - from) / nb)
-	if (step < 1) step = 1
 	while ((getline l < namefile) > 0) {
 		split(l, a, "\t")
 		if (a[1] != "" && a[2] != "") name[a[1]] = a[2]

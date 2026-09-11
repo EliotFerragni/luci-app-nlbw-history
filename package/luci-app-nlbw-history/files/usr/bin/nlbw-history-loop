@@ -22,6 +22,12 @@ while :; do
 	esac
 	[ "$PERIOD" -lt 5 ] && PERIOD=5
 
-	sleep "$PERIOD" &
+	# Sleep to the next multiple of the period rather than for a whole period,
+	# because the sample itself takes time: left to drift, the samples slide
+	# out of the graph's buckets and leave one of them empty every so often.
+	_sleep=$((PERIOD - $(date +%s) % PERIOD))
+	[ "$_sleep" -lt 2 ] && _sleep=$((_sleep + PERIOD))
+
+	sleep "$_sleep" &
 	wait $!
 done
