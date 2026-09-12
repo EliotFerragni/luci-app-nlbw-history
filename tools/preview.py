@@ -6,8 +6,11 @@ the sampler stores, aggregates it with the real nlbw-history-query, and runs
 the real main.js behind stubs shaped like LuCI's E, rpc, uci, view and poll.
 
     python3 tools/preview.py                  # serve the page, click around
-    python3 tools/preview.py --port 9000
+    python3 tools/preview.py --dark           # in LuCI's dark theme
     python3 tools/preview.py --screenshots    # rewrite docs/*.png instead
+
+--dark, --days, --time-format and --date-format apply to both, so a screenshot
+shows the same page serving would.
 
 Served, the page is on http://127.0.0.1:8099 and its rpc calls run the query
 script for real, so the device, protocol and period filters behave as they do
@@ -35,6 +38,7 @@ import os
 import pathlib
 import random
 import shutil
+import string
 import subprocess
 import sys
 import tempfile
@@ -76,31 +80,43 @@ STATUS = {"status": {
     "sampler": "running",
 }}
 
-# Close enough to LuCI's bootstrap theme to be honest about the layout. The
-# page itself brings its own styling for everything it draws.
-CSS = """
-:root { color-scheme: light }
-body { margin: 0; background: #f6f6f6; color: #212529;
+# Close enough to LuCI's bootstrap themes to be honest about the layout. The
+# page itself brings its own styling for everything it draws, and the charts
+# paint in currentColor, so they follow the text without knowing the theme.
+LIGHT = dict(scheme="light", bg="#f6f6f6", panel="#ffffff", border="#e3e3e3",
+             rule="#dcdcdc", text="#212529", muted="#666666", label="#444444",
+             link="#0069d9", row="#fafafa", line="#ededed", head="#555555",
+             headrule="#dddddd", field="#ffffff", fieldborder="#cccccc")
+DARK = dict(scheme="dark", bg="#101214", panel="#191c20", border="#2a2f36",
+            rule="#2a2f36", text="#d7dde3", muted="#98a1aa", label="#b4bcc4",
+            link="#6cb2ff", row="#1d2126", line="#262b31", head="#a7afb8",
+            headrule="#333a42", field="#23272d", fieldborder="#3a4048")
+
+CSS = string.Template("""
+:root { color-scheme: $scheme }
+body { margin: 0; background: $bg; color: $text;
        font: 14px/1.5 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif }
 #page { max-width: 1180px; margin: 0 auto; padding: 18px 22px 26px }
 .cbi-map > h2 { font-size: 26px; font-weight: 400; margin: 0 0 14px; padding-bottom: 8px;
-                border-bottom: 1px solid #dcdcdc; color: #0069d9 }
-.cbi-section { background: #fff; border: 1px solid #e3e3e3; border-radius: 3px;
+                border-bottom: 1px solid $rule; color: $link }
+.cbi-section { background: $panel; border: 1px solid $border; border-radius: 3px;
                padding: 14px 16px; margin-bottom: 14px }
-.cbi-section-descr { color: #666; font-size: 13px }
-label { font-size: 13px; color: #444 }
-select.cbi-input-select { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #ccc;
-                          border-radius: 3px; background: #fff; color: #212529 }
-a { color: #0069d9; text-decoration: none }
+.cbi-section-descr { color: $muted; font-size: 13px }
+label { font-size: 13px; color: $label }
+select.cbi-input-select { font: inherit; font-size: 13px; padding: 4px 6px;
+                          border: 1px solid $fieldborder; border-radius: 3px;
+                          background: $field; color: $text }
+a { color: $link; text-decoration: none }
 .table { display: table; width: 100%; border-collapse: collapse; margin-top: 4px }
 .tr { display: table-row }
-.th, .td { display: table-cell; padding: 7px 10px; border-bottom: 1px solid #ededed;
+.th, .td { display: table-cell; padding: 7px 10px; border-bottom: 1px solid $line;
            vertical-align: middle; font-size: 13px }
-.table-titles .th { font-weight: 600; color: #555; border-bottom: 2px solid #ddd; font-size: 12px }
-.tr:nth-child(even) { background: #fafafa }
-input[type=checkbox] { width: 15px; height: 15px; accent-color: #0069d9; margin: 0 }
+.table-titles .th { font-weight: 600; color: $head; border-bottom: 2px solid $headrule;
+                    font-size: 12px }
+.tr:nth-child(even) { background: $row }
+input[type=checkbox] { width: 15px; height: 15px; accent-color: $link; margin: 0 }
 svg { margin-bottom: 4px }
-"""
+""")
 
 # The view is a LuCI module body, so it runs as-is given the same globals LuCI
 # passes it. E()'s contract matters: function-valued attributes are listeners.
@@ -261,7 +277,7 @@ def run_query(work, query, args):
 
 
 def write_page(work, name, data, hidden=None, device="", protocol="", period="h24",
-               live=False, formats=None):
+               live=False, formats=None, dark=False):
     src = VIEW.read_text()
     if "</script" in src:
         sys.exit("the view contains a </script>, which cannot be inlined as-is")
@@ -303,7 +319,7 @@ mod.load().then(function(res) {
 		});
 	}
 });
-</script></body></html>""" % (CSS, src, json.dumps(fixture), json.dumps(json.dumps(hidden)),
+</script></body></html>""" % (CSS.substitute(DARK if dark else LIGHT), src, json.dumps(fixture), json.dumps(json.dumps(hidden)),
                               BOOT + (STUBS_LIVE if live else STUBS_FIXED),
                               json.dumps(bool(live)), json.dumps(device),
                               json.dumps(protocol), json.dumps(period), json.dumps(bool(live)))
@@ -334,13 +350,13 @@ def shoot(work, page, out):
     print("  %-28s %sx%s  %d KiB" % (out.name, im.width, im.height, out.stat().st_size // 1024))
 
 
-def serve(work, query, port, formats):
+def serve(work, query, port, formats, dark):
     """Hand the page the real query output, so its filters actually filter."""
     import http.server
     import urllib.parse
 
     first = run_query(work, query, [24, 160, "", "", 0, ""])
-    page = write_page(work, "live", first, live=True, formats=formats).read_bytes()
+    page = write_page(work, "live", first, live=True, formats=formats, dark=dark).read_bytes()
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def send_json(self, obj):
@@ -412,6 +428,8 @@ def main():
                     help="build in DIR and leave it there, rather than in a temporary "
                          "directory that is deleted on exit; the synthetic day files and the "
                          "stubbed query script in it can be run by hand")
+    ap.add_argument("--dark", action="store_true",
+                    help="render in a dark theme, like LuCI's dark one")
     ap.add_argument("--time-format", default="auto", choices=("auto", "24", "12"),
                     help="what the page is told the clock setting is")
     ap.add_argument("--date-format", default="auto", choices=("auto", "dmy", "mdy"),
@@ -443,7 +461,7 @@ def main():
     formats = {"time_format": args.time_format, "date_format": args.date_format}
 
     if not args.screenshots:
-        serve(work, query, args.port, formats)
+        serve(work, query, args.port, formats, args.dark)
         finish(work, args)
         return
 
@@ -454,9 +472,11 @@ def main():
          dict(hidden={"devices": BUSIEST, "protocols": []})),
     ]
     DOCS.mkdir(exist_ok=True)
+    if args.dark:
+        print("  note: writing dark images over the light ones the README uses")
     for name, q, page_args in shots:
         data = run_query(work, query, q["args"])
-        page = write_page(work, name, data, **page_args)
+        page = write_page(work, name, data, formats=formats, dark=args.dark, **page_args)
         shoot(work, page, DOCS / ("graphs-%s.png" % name))
 
     finish(work, args)
