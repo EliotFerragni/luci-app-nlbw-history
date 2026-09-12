@@ -1,4 +1,4 @@
-# luci-app-nlbw-history 0.5.0
+# luci-app-nlbw-history 1.0.0
 
 Historical per-device bandwidth graphs for OpenWrt, built on the counters
 `nlbwmon` already collects. It samples nlbwmon on a timer, stores the delta
@@ -89,8 +89,8 @@ protocols on one side of it that are absent on the other.
 [Releases](../../releases) page. It is architecture independent, so the same
 file works on any target:
 
-    scp luci-app-nlbw-history_0.5.0-1_all.ipk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_0.5.0-1_all.ipk'
+    scp luci-app-nlbw-history_1.0.0-1_all.ipk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.0-1_all.ipk'
 
 **Option B: no package manager.** Copy the source tree to the router and run
 `install.sh` on it:

@@ -91,7 +91,7 @@ publishes nothing: the upload happens at the moment the release is published.
 3. Sanity check the build with `./build-ipk.sh`.
 4. Commit and push to `main`.
 5. On GitHub, Releases → Draft a new release. Set the tag to `v<PKG_VERSION>`
-   (`v0.5.0` for `PKG_VERSION:=0.5.0`) targeting that commit, write the notes
+   (`v1.2.3` for `PKG_VERSION:=1.2.3`) targeting that commit, write the notes
    describing what changed, and publish. The release notes are the changelog;
    the repository does not keep one.
 6. Publishing triggers the workflow, which builds the `.ipk` and attaches it
