@@ -42,6 +42,40 @@ than about a month, which is what keeps a query affordable on a router.
 Working on it rather than running it? See [DEVELOPMENT.md](DEVELOPMENT.md)
 for the build, the CI and the release procedure.
 
+## What gets counted is nlbwmon's decision
+
+This package measures nothing. It reads the counters `nlbwmon` already keeps,
+stores the difference between two readings, and draws it. Everything about
+*what* is in those counters therefore comes from nlbwmon's own configuration,
+not from anything here:
+
+- **which traffic is accounted at all.** nlbwmon has a list of local networks,
+  and it records a flow only when exactly one of its two endpoints is inside
+  them. Traffic with both endpoints local is skipped, so LAN to guest, or a
+  device talking to the router itself, never appears here. Traffic to anything
+  outside those networks does appear, multicast and broadcast included.
+- **which interfaces and subnets those are.** A device that never shows up in
+  the graphs is usually on a network nlbwmon was not told about.
+- **the protocol names.** *HTTPS*, *QUIC*, *SMB* and the rest are nlbwmon's
+  layer 7 classification, from its own protocol list. This page only stacks
+  what it is handed, so a protocol you expect to see is a question for
+  nlbwmon, and so is one you see named *unknown*.
+- **when the counters reset.** nlbwmon keeps an accounting period and rolls
+  over to a new one; the sampler treats a counter going backwards as a reset
+  and counts the new value as the traffic since. History already stored is
+  unaffected, so the graphs survive a rollover that the nlbwmon page itself
+  will show as a fresh start.
+
+All of that is changed on nlbwmon's side, through its own LuCI page if
+`luci-app-nlbwmon` is installed, or in `/etc/config/nlbwmon`, followed by
+`/etc/init.d/nlbwmon restart`. Nothing in **Bandwidth History → Settings**
+changes what is accounted: those options only decide how often this package
+reads the counters and how long it keeps what it read.
+
+Changing nlbwmon's configuration does not rewrite history either. It applies
+from the next sample on, so a graph can straddle a change, showing devices or
+protocols on one side of it that are absent on the other.
+
 ## Requirements
 
 `nlbwmon` and `rpcd-mod-ucode`:
@@ -148,6 +182,10 @@ If it starts and dies, run one sample by hand and read the error:
 That must print a header line and then one tab separated row per device. If it
 errors, nlbwmon isn't running or its socket is missing, and nothing downstream
 can work.
+
+If it runs but a device you expect is missing from that output, the device is
+missing from nlbwmon's accounting, not from this package: see
+[What gets counted is nlbwmon's decision](#what-gets-counted-is-nlbwmons-decision).
 
 **The LuCI page is missing from the menu**
 
