@@ -12,12 +12,11 @@
 #   a device selected     per protocol for that device
 #   a protocol selected   per device for that protocol
 #
-# <hide> is a comma separated list of keys to leave out of the stack, in
-# whichever dimension is being stacked: MACs when that is devices, protocol
-# names when it is protocols. Hidden keys are dropped before the top N is
-# picked, so hiding the one device that dwarfs the rest both rescales the
-# chart and lets a further device up out of "other". They stay in the totals
-# tables, which report what was recorded rather than what is drawn.
+# <hide> is a comma separated list of keys to leave out of the stack, MACs or
+# protocol names depending on which is being stacked. They are dropped before
+# the top N is picked, so hiding the device that dwarfs the rest also lets a
+# further one up out of "other", and they stay in the totals tables, which
+# report what was recorded rather than what is drawn.
 #
 # Output:
 # { "from":…, "to":…, "step":…, "buckets":…, "last_sample":…,
@@ -120,6 +119,11 @@ NAMES="$RUN/names.$$"
 awk -F'\t' -v from="$FROM" -v to="$TO" -v nb="$BUCKETS" -v step="$STEP" -v top="$TOP" \
     -v onlymac="$MAC" -v onlyproto="$PROTO" -v last="$LAST" -v namefile="$NAMES" \
     -v hidden="$HIDE" '
+# Arrays, all keyed by MAC or protocol name:
+#   RX/TX[key, bucket]  the stacked series, the only thing the chart draws
+#   tot/seen[key]       totals and presence for the stacked dimension
+#   drx/dtx/dtot/seendev[mac]     per device, for the table
+#   prx/ptx/ptot/seenproto[name]  per protocol, for the table
 BEGIN {
 	while ((getline l < namefile) > 0) {
 		split(l, a, "\t")
@@ -208,6 +212,8 @@ function emit(k, key,   b) {
 END {
 	n = sortkeys(seen, ord, tot)
 	nshow = (n > top) ? top : n
+	# everything past the top N is summed into one band; \002 keeps that key
+	# from colliding with a device or protocol that happens to be called other
 	for (i = nshow + 1; i <= n; i++)
 		for (b = 0; b < nb; b++) {
 			RX["\002other", b] += RX[ord[i], b]

@@ -50,56 +50,66 @@ function clockOpts(opts) {
 	return opts;
 }
 
+// Blocked site data and private windows make localStorage throw rather than
+// come back empty, so every access goes through these two.
+function stored(key) {
+	try { return window.localStorage.getItem(key); } catch (e) { return null; }
+}
+
+function store(key, value) {
+	try { window.localStorage.setItem(key, value); } catch (e) {}
+}
+
 function loadUnits() {
-	try { UNITS = window.localStorage.getItem('nlbw-history.units') || 'si'; }
-	catch (e) { UNITS = 'si'; }
+	UNITS = stored('nlbw-history.units');
 	if (UNITS !== 'si' && UNITS !== 'iec') UNITS = 'si';
 }
 
 function saveUnits(v) {
 	UNITS = v;
-	try { window.localStorage.setItem('nlbw-history.units', v); } catch (e) {}
+	store('nlbw-history.units', v);
 }
 
-// Series taken out of the stack so the rest can use the full height of the
-// chart, because one device pulling a hundred times what the others do
-// flattens them all into the baseline. Kept per stacked dimension: MACs when
-// devices are stacked, protocol names when protocols are. It is a display
-// choice, so it lives in the browser and not in the router's config.
+// Series taken out of the stack so the rest can use the full height, kept per
+// stacked dimension: MACs while devices are stacked, protocol names while
+// protocols are. A display choice, so it lives in the browser rather than in
+// the router's config.
 let hidden = { devices: {}, protocols: {} };
 
 function loadHidden() {
 	hidden = { devices: {}, protocols: {} };
-	let raw = null;
-	try { raw = window.localStorage.getItem('nlbw-history.hidden'); } catch (e) { return; }
+	const raw = stored('nlbw-history.hidden');
 	if (!raw) return;
 	try {
-		const o = JSON.parse(raw) || {};
+		const saved = JSON.parse(raw) || {};
 		[ 'devices', 'protocols' ].forEach(function(dim) {
-			for (let k of o[dim] || [])
+			for (let k of saved[dim] || [])
 				if (typeof k === 'string' && k !== '') hidden[dim][k] = true;
 		});
 	} catch (e) {}
 }
 
 function saveHidden() {
-	try {
-		window.localStorage.setItem('nlbw-history.hidden', JSON.stringify({
-			devices: Object.keys(hidden.devices),
-			protocols: Object.keys(hidden.protocols)
-		}));
-	} catch (e) {}
+	store('nlbw-history.hidden', JSON.stringify({
+		devices: Object.keys(hidden.devices),
+		protocols: Object.keys(hidden.protocols)
+	}));
 }
 
-// Which dimension the chart stacks, and so which hidden set applies. The
-// backend decides the same way: protocols when a single device is selected,
-// devices otherwise.
+// Which dimension the chart stacks, and so which hidden set applies: protocols
+// when a single device is selected, devices otherwise. The backend decides the
+// same way, from the same two filters.
+function dimFor(mac, protocol) {
+	return (mac && !protocol) ? 'protocols' : 'devices';
+}
+
+// The same question once the answer is in the response.
 function dimOf(data) {
 	return (data && data.mode === 'protocols') ? 'protocols' : 'devices';
 }
 
 function hideParam(mac, protocol) {
-	return Object.keys(hidden[(mac && !protocol) ? 'protocols' : 'devices']).join(',');
+	return Object.keys(hidden[dimFor(mac, protocol)]).join(',');
 }
 
 // Resolved per request rather than when the period is picked, so the current
@@ -263,10 +273,8 @@ function keyLabel(data, key) {
 
 function renderCharts(node, data, onToggle) {
 	const dim = dimOf(data);
-	// The backend already leaves hidden keys out of the series, and drops them
-	// before picking the top N so a further one can come up out of "other".
-	// Filtering again here is what makes a click rescale the chart at once,
-	// without waiting for the refreshed series to come back.
+	// The backend already leaves hidden keys out. Filtering again is what makes
+	// a click rescale the chart at once, without waiting for the refetch.
 	const keys = Object.keys(data.series || {}).filter(function(k) { return !hidden[dim][k]; });
 	if (!keys.length) {
 		node.innerHTML = '';
