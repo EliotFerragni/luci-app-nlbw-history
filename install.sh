@@ -11,17 +11,11 @@ set -e
 
 SRC=$(cd "$(dirname "$0")" && pwd)/package/luci-app-nlbw-history/files
 
-FILES="
-/etc/init.d/nlbw-history
-/usr/bin/nlbw-history-collect
-/usr/bin/nlbw-history-loop
-/usr/bin/nlbw-history-query
-/usr/share/rpcd/ucode/luci.nlbw_history.uc
-/usr/share/rpcd/acl.d/luci-app-nlbw-history.json
-/usr/share/luci/menu.d/luci-app-nlbw-history.json
-/www/luci-static/resources/view/nlbw-history/main.js
-/www/luci-static/resources/view/nlbw-history/settings.js
-"
+# Everything the package ships, as destination paths, read from the files tree
+# rather than listed again here, so adding a file needs no change to this
+# script. The config file is left out and handled on its own below: it is
+# neither overwritten on install nor removed on uninstall.
+FILES=$(cd "$SRC" && find . -type f ! -path './etc/config/*' | sed 's|^\.||' | sort)
 
 if [ "$1" = "--remove" ]; then
 	/etc/init.d/nlbw-history stop 2>/dev/null || true
@@ -42,9 +36,10 @@ command -v ucode >/dev/null 2>&1 || [ -f /usr/lib/rpcd/ucode.so ] || \
 for f in $FILES; do
 	mkdir -p "$(dirname "$f")"
 	cp "$SRC$f" "$f"
+	case "$f" in
+		/etc/init.d/*|/usr/bin/*) chmod 0755 "$f" ;;
+	esac
 done
-chmod 0755 /etc/init.d/nlbw-history /usr/bin/nlbw-history-collect \
-           /usr/bin/nlbw-history-loop /usr/bin/nlbw-history-query
 
 if [ ! -f /etc/config/nlbw-history ]; then
 	cp "$SRC/etc/config/nlbw-history" /etc/config/nlbw-history

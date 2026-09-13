@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-nlbw-history
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=Local build
 
@@ -66,6 +66,14 @@ define Package/luci-app-nlbw-history/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
 /etc/init.d/nlbw-history enable
+# A bare start is not enough: procd compares the instance definition and does
+# nothing when it is unchanged, which it always is here, so the old
+# nlbw-history-loop would keep running from the replaced inode. Not restart
+# either, because its stop asks procd to delete a service that is not
+# registered at this point (prerm stopped it on an upgrade, and on a first
+# install it never ran) and ubus reports that as a command failure. Only the
+# stop is silenced: a start that fails is still worth seeing.
+/etc/init.d/nlbw-history stop >/dev/null 2>&1
 /etc/init.d/nlbw-history start
 /etc/init.d/rpcd reload >/dev/null 2>&1
 # LuCI caches the menu and the module index; both have to go or the new entry
@@ -78,7 +86,10 @@ define Package/luci-app-nlbw-history/prerm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
 /etc/init.d/nlbw-history stop >/dev/null 2>&1
-/etc/init.d/nlbw-history disable >/dev/null 2>&1
+# opkg passes "upgrade" when a newer version is replacing this one, and only a
+# real removal should drop the rc.d symlink. Disabling on upgrade leaves the
+# service off permanently if the install dies before the new postinst runs.
+[ "$$1" = "upgrade" ] || /etc/init.d/nlbw-history disable >/dev/null 2>&1
 exit 0
 endef
 
