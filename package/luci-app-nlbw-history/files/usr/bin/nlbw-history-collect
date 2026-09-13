@@ -12,6 +12,9 @@
 #   nlbw-history-collect            one sample (called by nlbw-history-loop)
 #   nlbw-history-collect --flush    flush the spools now
 #   nlbw-history-collect --status   print diagnostics
+#   nlbw-history-collect --scrub    report stored rows the max_rate ceiling
+#                                   rejects, without changing anything
+#   nlbw-history-collect --scrub --apply   move those rows out of the history
 #
 # It only queries nlbwmon over its control socket; no packet inspection, no
 # firewall rules, no effect on software or hardware flow offloading.
@@ -24,12 +27,14 @@ config_get RETENTION main retention 30
 config_get FLUSH_INTERVAL main flush_interval 600
 config_get PROTOCOLS main protocols 1
 config_get PROTO_INTERVAL main protocol_interval 900
+config_get MAX_RATE main max_rate 10000
 config_get TIME_FORMAT main time_format auto
 config_get DATE_FORMAT main date_format auto
 
 case "$RETENTION" in ''|*[!0-9]*) RETENTION=30 ;; esac
 case "$FLUSH_INTERVAL" in ''|*[!0-9]*) FLUSH_INTERVAL=600 ;; esac
 case "$PROTO_INTERVAL" in ''|*[!0-9]*) PROTO_INTERVAL=900 ;; esac
+case "$MAX_RATE" in ''|*[!0-9]*) MAX_RATE=10000 ;; esac
 [ "$RETENTION" -lt 1 ] && RETENTION=1
 [ "$PROTO_INTERVAL" -lt 60 ] && PROTO_INTERVAL=60
 
@@ -48,6 +53,14 @@ NOW=$(date +%s)
 _h=$(date +%H); _m=$(date +%M); _s=$(date +%S)
 MIDNIGHT=$((NOW - (${_h#0} * 3600 + ${_m#0} * 60 + ${_s#0})))
 BUCKET=$((NOW - NOW % PROTO_INTERVAL))
+
+# Seconds this sample's deltas cover. The plausibility ceiling is derived from
+# this and not from period, or restarting the sampler after a pause would
+# reject the one legitimately large delta that covers the gap.
+LASTTS=$(cat "$LASTSAMPLE" 2>/dev/null)
+case "$LASTTS" in ''|*[!0-9]*) LASTTS=0 ;; esac
+ELAPSED=0
+[ "$LASTTS" -gt 0 ] && [ "$NOW" -gt "$LASTTS" ] && ELAPSED=$((NOW - LASTTS))
 
 day_of() {
 	# epoch -> YYYY-MM-DD, busybox and GNU date
@@ -98,6 +111,7 @@ flush_one() {
 flush_spool() {
 	flush_one "$RUN/spool" ".tsv" 0
 	flush_one "$RUN/spool.proto" ".proto.tsv" 1
+	flush_one "$RUN/spool.suspect" ".suspect.tsv" 0
 	echo "$NOW" > "$LASTFLUSH"
 	prune
 	return 0
@@ -105,11 +119,120 @@ flush_spool() {
 
 prune() {
 	cutoff=$(day_of $((NOW - RETENTION * 86400)))
-	for f in "$DATA_DIR"/????-??-??.tsv "$DATA_DIR"/????-??-??.proto.tsv; do
+	for f in "$DATA_DIR"/????-??-??.tsv "$DATA_DIR"/????-??-??.proto.tsv \
+	         "$DATA_DIR"/????-??-??.suspect.tsv; do
 		[ -f "$f" ] || continue
 		b=${f##*/}; b=${b%%.*}
 		awk -v a="$b" -v c="$cutoff" 'BEGIN { exit !(a < c) }' && rm -f "$f"
 	done
+	return 0
+}
+
+# Apply the max_rate ceiling to history already on disk. Rows it rejects are
+# moved into the day's .suspect.tsv rather than deleted, so the graphs report
+# the gap exactly as they do for a live rejection.
+#
+# How long a stored row covers is inferred from the gap to the previous row for
+# the same device. An idle device has wider gaps, which only makes the ceiling
+# more permissive, so this errs towards keeping data. The first row for a
+# device in a day file has nothing to measure against and is always kept.
+_pl() { [ "$1" = 1 ] && printf '%s' "$2" || printf '%s' "$3"; }
+
+scrub() {
+	_apply=$1
+	if [ "$MAX_RATE" -le 0 ]; then
+		echo "max_rate is 0, so nothing is checked. Set it first."
+		return 0
+	fi
+
+	_rep="$RUN/scrub.report.$$"
+	_bad="$RUN/scrub.bad.$$"
+	: > "$_rep"
+	_ndev=0; _nproto=0; _ndays=0
+
+	for f in "$DATA_DIR"/????-??-??.tsv; do
+		[ -f "$f" ] || continue
+		_day=${f%.tsv}
+		: > "$_bad"
+		[ -n "$_apply" ] && : > "$f.new"
+
+		_n=$(awk -v rate="$MAX_RATE" -v pi="$PROTO_INTERVAL" -v bad="$_bad" \
+		     -v keep="$f.new" -v susp="$_day.suspect.tsv" -v apply="$_apply" \
+		     -v rep="$_rep" -v day="${_day##*/}" '
+			{
+				el = seen[$2] ? $1 - prev[$2] : 0
+				seen[$2] = 1; prev[$2] = $1
+				cap = (el > 0) ? rate * 125000 * el : 0
+				if (cap > 0 && ($3 + 0 > cap || $4 + 0 > cap)) {
+					n++
+					printf "%s\t%d\n", $2, int($1 / pi) * pi >> bad
+					printf "  %s  %s  rx %.1f GB  tx %.1f GB  over %d s\n", \
+						day, $2, $3 / 1e9, $4 / 1e9, el >> rep
+					if (apply != "")
+						printf "%s\t%s\t%s\t%s\t%d\t%.0f\n", \
+							$1, $2, $3, $4, el, cap >> susp
+					next
+				}
+				if (apply != "") print >> keep
+			}
+			END { print n + 0 }
+		' "$f")
+		case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
+
+		# Protocol rows are stored summed per bucket, so a bogus sample cannot
+		# be subtracted back out of one. The whole bucket goes for the devices
+		# that were rejected, which also loses the legitimate protocol traffic
+		# recorded in that bucket. Reported, because it is a real loss.
+		_np=0
+		if [ "$_n" -gt 0 ] && [ -f "$_day.proto.tsv" ]; then
+			[ -n "$_apply" ] && : > "$_day.proto.tsv.new"
+			_np=$(awk -v bad="$_bad" -v keep="$_day.proto.tsv.new" -v apply="$_apply" '
+				BEGIN {
+					while ((getline l < bad) > 0) {
+						split(l, a, "\t")
+						drop[tolower(a[1]) SUBSEP (a[2] + 0)] = 1
+					}
+					close(bad)
+				}
+				{
+					if ((tolower($2) SUBSEP ($1 + 0)) in drop) { n++; next }
+					if (apply != "") print >> keep
+				}
+				END { print n + 0 }
+			' "$_day.proto.tsv")
+			case "$_np" in ''|*[!0-9]*) _np=0 ;; esac
+		fi
+
+		if [ -n "$_apply" ]; then
+			if [ "$_n" -gt 0 ]; then mv "$f.new" "$f"; else rm -f "$f.new"; fi
+			if [ "$_np" -gt 0 ]; then mv "$_day.proto.tsv.new" "$_day.proto.tsv"
+			else rm -f "$_day.proto.tsv.new"; fi
+		fi
+
+		_ndev=$((_ndev + _n)); _nproto=$((_nproto + _np))
+		[ "$_n" -gt 0 ] && _ndays=$((_ndays + 1))
+	done
+	rm -f "$_bad"
+
+	if [ "$_ndev" -eq 0 ]; then
+		echo "No stored rows exceed the ${MAX_RATE} Mbit/s ceiling."
+		rm -f "$_rep"
+		return 0
+	fi
+
+	head -n 40 "$_rep"
+	[ "$(wc -l < "$_rep")" -gt 40 ] && echo "  ... $(( $(wc -l < "$_rep") - 40 )) more"
+	rm -f "$_rep"
+	_dr=$(_pl "$_ndev" row rows); _df=$(_pl "$_ndays" file files)
+	_pr=$(_pl "$_nproto" row rows)
+	if [ -n "$_apply" ]; then
+		echo "Moved $_ndev device $_dr across $_ndays day $_df into .suspect.tsv,"
+		echo "and dropped $_nproto protocol $_pr covering the same buckets."
+	else
+		echo "Would move $_ndev device $_dr across $_ndays day $_df into .suspect.tsv,"
+		echo "and drop $_nproto protocol $_pr covering the same buckets."
+		echo "Nothing has been changed. Re-run with --apply to do it."
+	fi
 	return 0
 }
 
@@ -135,6 +258,19 @@ status() {
 		echo "last sample:     never"
 	fi
 	echo "spool:           $(cat "$RUN/spool" "$RUN/spool.proto" 2>/dev/null | wc -l | tr -d ' ') lines waiting"
+	if [ "$MAX_RATE" -le 0 ]; then
+		echo "discarded:       check disabled (max_rate 0)"
+	else
+		_disc=$(cat "$RUN/spool.suspect" "$DATA_DIR"/????-??-??.suspect.tsv 2>/dev/null | wc -l | tr -d ' ')
+		if [ "${_disc:-0}" -gt 0 ]; then
+			_dlast=$(cat "$RUN/spool.suspect" "$DATA_DIR"/????-??-??.suspect.tsv 2>/dev/null |
+				awk 'BEGIN { m = 0 } $1 + 0 > m { m = $1 + 0 } END { print m }')
+			[ "$_disc" = 1 ] && _w="sample" || _w="samples"
+			echo "discarded:       $_disc implausible $_w, ceiling ${MAX_RATE} Mbit/s, last $(stamp "$_dlast")"
+		else
+			echo "discarded:       none, ceiling ${MAX_RATE} Mbit/s"
+		fi
+	fi
 	echo "stored:          $(ls -1 "$DATA_DIR"/????-??-??*.tsv 2>/dev/null | wc -l | tr -d ' ') day files, $(du -sh "$DATA_DIR" 2>/dev/null | cut -f1) on disk"
 	if { [ -f /var/run/nlbw-history.pid ] && kill -0 "$(cat /var/run/nlbw-history.pid)" 2>/dev/null; } ||
 	   pgrep -f '/usr/bin/nlbw-history-loop' >/dev/null 2>&1; then
@@ -148,12 +284,21 @@ case "$1" in
 	--status) status; exit 0 ;;
 esac
 
+# Scrub rewrites the day files, so it takes the same lock a sample does. It is
+# the one caller with a user waiting on the other end, so it says why it did
+# nothing instead of exiting quietly.
+busy() {
+	[ "$1" = "--scrub" ] && echo "Busy: a sample or flush is in progress. Try again in a moment."
+	return 0
+}
+
 # Only one sampler at a time; recover a lock left behind by a killed process.
 if ! mkdir "$LOCK" 2>/dev/null; then
 	if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then
 		rmdir "$LOCK" 2>/dev/null
-		mkdir "$LOCK" 2>/dev/null || exit 0
+		mkdir "$LOCK" 2>/dev/null || { busy "$1"; exit 0; }
 	else
+		busy "$1"
 		exit 0
 	fi
 fi
@@ -161,6 +306,13 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
 case "$1" in
 	--flush) flush_spool; exit $? ;;
+	--scrub)
+		# The spool is flushed first, or rows still in RAM would escape the
+		# ceiling and land in the history right after it was cleaned.
+		flush_spool
+		if [ "$2" = "--apply" ]; then scrub 1; else scrub ""; fi
+		exit $?
+		;;
 esac
 
 [ -x "$NLBW" ] || {
@@ -172,13 +324,18 @@ esac
 # unquoted values. Columns are located by name, because their order changes
 # with the grouping.
 sample() {
-	# $1 = mode (dev|proto), $2 = nlbw grouping, $3 = state, $4 = spool, $5 = timestamp
+	# $1 = mode (dev|proto), $2 = nlbw grouping, $3 = state, $4 = spool,
+	# $5 = timestamp, $6 = file for rejected samples, empty to record none
 	_tmp="$RUN/sample.$$"
 	"$NLBW" -c csv -g "$2" -q -n 2>/dev/null > "$_tmp" || { rm -f "$_tmp"; return 1; }
 	[ -s "$_tmp" ] || { rm -f "$_tmp"; return 1; }
 
-	awk -F'\t' -v mode="$1" -v ts="$5" -v state="$3" -v newstate="$3.new" -v spool="$4" '
+	awk -F'\t' -v mode="$1" -v ts="$5" -v state="$3" -v newstate="$3.new" -v spool="$4" \
+	    -v suspect="$6" -v maxrate="$MAX_RATE" -v elapsed="$ELAPSED" '
 		BEGIN {
+			# Bytes one key could plausibly have moved since the last sample.
+			# 1 Mbit/s is 125000 bytes/s.
+			cap = (maxrate > 0 && elapsed > 0) ? maxrate * 125000 * elapsed : 0
 			while ((getline line < state) > 0) {
 				n = split(line, a, "\t")
 				if (mode == "dev" && n >= 3) {
@@ -223,6 +380,16 @@ sample() {
 				drx = (rx[k] >= prx[k]) ? rx[k] - prx[k] : rx[k]
 				dtx = (tx[k] >= ptx[k]) ? tx[k] - ptx[k] : tx[k]
 				if (drx <= 0 && dtx <= 0) continue
+				# Past the ceiling it is the counter that moved, not the
+				# traffic. The new absolute value went to newstate above, so
+				# the baseline still advances and only this one interval is
+				# lost rather than everything after it.
+				if (cap > 0 && (drx > cap || dtx > cap)) {
+					if (suspect != "")
+						printf "%d\t%s\t%.0f\t%.0f\t%d\t%.0f\n", \
+							ts, kk[1], drx, dtx, elapsed, cap >> suspect
+					continue
+				}
 				if (mode == "dev")
 					printf "%d\t%s\t%.0f\t%.0f\n", ts, kk[1], drx, dtx >> spool
 				else
@@ -236,13 +403,25 @@ sample() {
 	return $_rc
 }
 
-if ! sample dev mac "$RUN/state" "$RUN/spool" "$NOW"; then
+# cat rather than a < redirect: the spool does not exist until something is
+# actually rejected, and a failed redirect is reported by the shell itself,
+# before the 2>/dev/null on the command can take effect.
+_discarded=$(cat "$RUN/spool.suspect" 2>/dev/null | wc -l | tr -d ' ')
+
+if ! sample dev mac "$RUN/state" "$RUN/spool" "$NOW" "$RUN/spool.suspect"; then
 	logger -t nlbw-history "cannot read device counters from nlbwmon"
 	exit 1
 fi
 
+_now_discarded=$(cat "$RUN/spool.suspect" 2>/dev/null | wc -l | tr -d ' ')
+if [ "${_now_discarded:-0}" -gt "${_discarded:-0}" ]; then
+	logger -t nlbw-history "discarded $((${_now_discarded:-0} - ${_discarded:-0})) implausible sample(s): a counter moved further than max_rate=${MAX_RATE}Mbit/s allows over ${ELAPSED}s"
+fi
+
 if [ "$PROTOCOLS" = "1" ]; then
-	sample proto mac,layer7 "$RUN/state.proto" "$RUN/spool.proto" "$BUCKET" ||
+	# Same ceiling, but nothing recorded: a protocol delta is a share of that
+	# device's delta, so the device stream has already logged the event.
+	sample proto mac,layer7 "$RUN/state.proto" "$RUN/spool.proto" "$BUCKET" "" ||
 		logger -t nlbw-history "cannot read protocol counters from nlbwmon"
 else
 	rm -f "$RUN/state.proto" "$RUN/spool.proto"

@@ -66,6 +66,14 @@ function series(req) {
 	return data;
 }
 
+// Rewrites stored history, so it is only ever reached through the settings
+// page's confirm step. apply is built here rather than passed through, so
+// nothing from the request reaches the command line.
+function scrub(req) {
+	let apply = (req.args && req.args.apply) ? ' --apply' : '';
+	return { output: run(`${COLLECT} --scrub${apply} 2>&1`) };
+}
+
 function status() {
 	let out = run(`${COLLECT} --status 2>&1`);
 	let info = {};
@@ -88,6 +96,10 @@ return {
 		status: {
 			args: {},
 			call: status
+		},
+		scrub: {
+			args: { apply: false },
+			call: scrub
 		}
 	}
 };

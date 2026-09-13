@@ -1,4 +1,4 @@
-# luci-app-nlbw-history 1.0.0
+# luci-app-nlbw-history 1.0.1
 
 Historical per-device bandwidth graphs for OpenWrt, built on the counters
 `nlbwmon` already collects. It samples nlbwmon on a timer, stores the delta
@@ -89,8 +89,8 @@ protocols on one side of it that are absent on the other.
 [Releases](../../releases) page. It is architecture independent, so the same
 file works on any target:
 
-    scp luci-app-nlbw-history_1.0.0-2_all.ipk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.0-2_all.ipk'
+    scp luci-app-nlbw-history_1.0.1-1_all.ipk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.1-1_all.ipk'
 
 **Option B: no package manager.** Copy the source tree to the router and run
 `install.sh` on it:
@@ -128,6 +128,7 @@ The same options live in `/etc/config/nlbw-history` if you prefer the shell:
 | `data_dir` | `/srv/nlbw-history` | where history is stored; **must be persistent** |
 | `protocols` | `1` | also record per-protocol traffic |
 | `protocol_interval` | `900` | seconds per stored protocol bucket |
+| `max_rate` | `10000` | Mbit/s; samples implying more than this are discarded, `0` disables |
 | `time_format` | `auto` | clock on the graphs: `auto`, `24` or `12` |
 | `date_format` | `auto` | date order on the graphs: `auto`, `dmy` or `mdy` |
 
@@ -187,6 +188,30 @@ If it runs but a device you expect is missing from that output, the device is
 missing from nlbwmon's accounting, not from this package: see
 [What gets counted is nlbwmon's decision](#what-gets-counted-is-nlbwmons-decision).
 
+**A bar is impossibly tall**
+
+A single bar claiming more than the link could physically carry is a counter
+glitch, not traffic. Hardware flow offloading keeps its own counters and folds
+the difference back into conntrack periodically; if that difference is computed
+against a reset or reused entry, one bogus jump lands in nlbwmon's totals and
+this package records it faithfully.
+
+New samples are checked against `max_rate` and kept out of the graphs. History
+recorded before that, or while the ceiling was higher, is checked on demand:
+
+    nlbw-history-collect --scrub             # report, change nothing
+    nlbw-history-collect --scrub --apply     # move those rows out
+
+The same check is behind **Check for implausible rows** on the settings page,
+which always shows you the report before offering to change anything. Rejected
+rows are moved into `<data_dir>/YYYY-MM-DD.suspect.tsv` rather than deleted,
+and the graphs then say how many samples are missing and when.
+
+Protocol rows are stored summed per `protocol_interval` bucket, so a single bad
+sample cannot be subtracted back out of one. Scrubbing drops the whole bucket
+for the affected device, which also loses the legitimate protocol traffic
+recorded in it. The per-device figures keep full resolution.
+
 **The LuCI page is missing from the menu**
 
     ls /www/luci-static/resources/view/nlbw-history/main.js
@@ -233,6 +258,7 @@ the graph is leaving out.
     /www/luci-static/resources/view/nlbw-history/settings.js the settings page
     <data_dir>/YYYY-MM-DD.tsv                                history: epoch, mac, rx, tx
     <data_dir>/YYYY-MM-DD.proto.tsv                          history: epoch, mac, protocol, rx, tx
+    <data_dir>/YYYY-MM-DD.suspect.tsv                        rejected: epoch, mac, rx, tx, elapsed, ceiling
 
 ## How this was written
 

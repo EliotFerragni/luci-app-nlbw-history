@@ -8,6 +8,9 @@
 			"uci": [ "nlbw-history" ]
 		},
 		"write": {
+			"ubus": {
+				"luci_nlbw_history": [ "scrub" ]
+			},
 			"uci": [ "nlbw-history" ]
 		}
 	}

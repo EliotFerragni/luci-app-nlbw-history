@@ -14,6 +14,13 @@ config nlbw_history 'main'
 	# Protocol traffic is aggregated into buckets this many seconds wide,
 	# because the protocol dimension multiplies the number of rows stored.
 	option protocol_interval '900'
+	# Ceiling for one sample, in Mbit/s. A sample claiming more than this link
+	# could have carried since the previous one is recorded as discarded
+	# instead of charted: a flow offload counter glitch can fold a bogus
+	# terabyte into conntrack in one go, and nlbwmon reports that as real
+	# traffic. Set it to the fastest link a device here can use. 0 accepts
+	# every sample.
+	option max_rate '10000'
 	# Display only. auto follows the browser's locale; 24 or 12 force the
 	# clock, dmy prints 31/12 and mdy prints 12/31.
 	option time_format 'auto'

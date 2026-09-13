@@ -21,6 +21,7 @@
 # Output:
 # { "from":…, "to":…, "step":…, "buckets":…, "last_sample":…,
 #   "mode":"devices"|"protocols", "coarse":true|false,
+#   "discarded":{"count":…,"first":…,"last":…,"devices":…},
 #   "devices":[ {"mac":…,"name":…,"rx":…,"tx":…,"charted":…,"hidden":…} ],
 #   "protocols":[ {"name":…,"rx":…,"tx":…,"charted":…,"hidden":…} ],
 #   "series": { "<key|other>": {"rx":[…],"tx":[…]} } }
@@ -88,18 +89,20 @@ case "$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
 day_of() { date -D %s -d "$1" +%Y-%m-%d 2>/dev/null || date -d "@$1" +%Y-%m-%d; }
 
 # Only the day files that can hold samples in the window. Device rows have 4
-# fields, protocol rows 5, so both sets can be read in a single pass.
+# fields, protocol rows 5 and rejected samples 6, so all three sets can be read
+# in a single pass.
 FILES=""
 d=$FROM
 while [ "$d" -le $((TO + 86400)) ]; do
 	day=$(day_of "$d")
-	for f in "$DATA_DIR/$day.tsv" "$DATA_DIR/$day.proto.tsv"; do
+	for f in "$DATA_DIR/$day.tsv" "$DATA_DIR/$day.proto.tsv" "$DATA_DIR/$day.suspect.tsv"; do
 		[ -f "$f" ] && FILES="$FILES $f"
 	done
 	d=$((d + 86400))
 done
 [ -f "$RUN/spool" ] && FILES="$FILES $RUN/spool"
 [ -f "$RUN/spool.proto" ] && FILES="$FILES $RUN/spool.proto"
+[ -f "$RUN/spool.suspect" ] && FILES="$FILES $RUN/spool.suspect"
 
 # Names: DHCP leases win over static host entries, both optional.
 NAMES="$RUN/names.$$"
@@ -181,6 +184,16 @@ NF == 5 {
 	RX[k, b] += $4; TX[k, b] += $5
 	tot[k] += $4 + $5; seen[k] = 1
 }
+# Samples the collector refused to believe, because a counter moved further
+# than max_rate allows. They carry no usable number, so they are counted rather
+# than charted: the point is that the gap is visible instead of silent.
+NF == 6 {
+	nbad++
+	if (badfirst == 0 || ts < badfirst) badfirst = ts
+	if (ts > badlast) badlast = ts
+	badmac[tolower($2)] = 1
+	next
+}
 function jstr(s,   i, c, out) {
 	out = ""
 	for (i = 1; i <= length(s); i++) {
@@ -225,6 +238,11 @@ END {
 		from, to, step, nb, last
 	printf "\"mode\":\"%s\",\"coarse\":%s,", \
 		(bykey == "proto" ? "protocols" : "devices"), (coarse ? "true" : "false")
+
+	nbaddev = 0
+	for (m in badmac) nbaddev++
+	printf "\"discarded\":{\"count\":%d,\"first\":%d,\"last\":%d,\"devices\":%d},", \
+		nbad + 0, badfirst + 0, badlast + 0, nbaddev
 
 	printf "\"devices\":["
 	nd = sortkeys(seendev, dord, dtot)

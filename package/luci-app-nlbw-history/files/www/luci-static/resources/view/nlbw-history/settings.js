@@ -2,11 +2,59 @@
 'require view';
 'require form';
 'require rpc';
+'require ui';
 
 const callStatus = rpc.declare({
 	object: 'luci_nlbw_history',
 	method: 'status'
 });
+
+const callScrub = rpc.declare({
+	object: 'luci_nlbw_history',
+	method: 'scrub',
+	params: [ 'apply' ]
+});
+
+function scrubOutput(res) {
+	return E('pre', {
+		style: 'max-height:18em;overflow:auto;white-space:pre-wrap;margin:1em 0'
+	}, (res && res.output) || _('No output.'));
+}
+
+// Never rewrites anything on the first click: the dry run is shown, and the
+// button that changes stored history is the second one.
+function runScrub() {
+	ui.showModal(_('Checking stored history'), [ E('p', { 'class': 'spinning' }, _('Reading the day files…')) ]);
+	return callScrub(false).then(function(res) {
+		ui.hideModal();
+		ui.showModal(_('Clean up stored history'), [
+			scrubOutput(res),
+			E('div', { 'class': 'right' }, [
+				E('button', { 'class': 'btn', click: ui.hideModal }, _('Cancel')),
+				' ',
+				E('button', {
+					'class': 'btn cbi-button-negative',
+					click: function() {
+						ui.showModal(_('Cleaning up'), [ E('p', { 'class': 'spinning' }, _('Rewriting the day files…')) ]);
+						return callScrub(true).then(function(done) {
+							ui.showModal(_('Done'), [
+								scrubOutput(done),
+								E('div', { 'class': 'right' },
+									E('button', { 'class': 'btn', click: ui.hideModal }, _('Close')))
+							]);
+						}).catch(function(e) {
+							ui.hideModal();
+							ui.addNotification(null, E('p', {}, _('Clean up failed') + ': ' + e));
+						});
+					}
+				}, _('Move them out of the history'))
+			])
+		]);
+	}).catch(function(e) {
+		ui.hideModal();
+		ui.addNotification(null, E('p', {}, _('Check failed') + ': ' + e));
+	});
+}
 
 return view.extend({
 	load: function() {
@@ -38,6 +86,7 @@ return view.extend({
 		info('protocols', 'protocols', _('Protocol recording'));
 		info('stored', 'stored', _('Stored history'));
 		info('spool', 'spool', _('Buffered in RAM'));
+		info('discarded', 'discarded', _('Discarded samples'));
 
 		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Sampling'));
 		s.anonymous = true;
@@ -61,6 +110,26 @@ return view.extend({
 		o.value('30', _('30 days'));
 		o.value('90', _('90 days'));
 		o.value('365', _('1 year'));
+
+		o = s.option(form.Value, 'max_rate', _('Reject samples above'),
+			_('Mbit/s. A sample claiming more traffic than this link could have carried since ' +
+			  'the previous one is recorded as discarded rather than charted, because a flow ' +
+			  'offload counter glitch can fold a bogus terabyte into the counters in one go. ' +
+			  'Set it to the fastest link a device here can use. 0 accepts every sample.'));
+		o.datatype = 'range(0,1000000)';
+		o.placeholder = '10000';
+		o.value('0', _('Accept everything'));
+		o.value('1000', _('1 Gbit/s'));
+		o.value('2500', _('2.5 Gbit/s'));
+		o.value('10000', _('10 Gbit/s'));
+
+		o = s.option(form.Button, '_scrub', _('Stored history'),
+			_('History recorded before this ceiling existed, or while it was higher, can still ' +
+			  'hold an implausible spike. This checks the stored day files and shows what it ' +
+			  'would move before changing anything.'));
+		o.inputtitle = _('Check for implausible rows');
+		o.inputstyle = 'apply';
+		o.onclick = runScrub;
 
 		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Storage'));
 		s.anonymous = true;

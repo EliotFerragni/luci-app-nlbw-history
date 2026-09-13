@@ -431,6 +431,7 @@ return view.extend({
 		const hiddenNode = E('div', { style: 'font-size:13px;margin-top:8px' });
 		const statusNode = E('div', { style: 'font-size:13px;opacity:0.75;margin-top:8px' });
 		const errorNode = E('div', { 'class': 'alert-message warning', style: 'display:none' });
+		const discardNode = E('div', { 'class': 'alert-message warning', style: 'display:none' });
 
 		function fillSelect(sel, current, allLabel, items, valueOf, labelOf) {
 			sel.innerHTML = '';
@@ -480,6 +481,26 @@ return view.extend({
 			}, _('show all')));
 		}
 
+		// Its own alert rather than one more clause in the grey status line: an
+		// interval with no usable number is worth noticing.
+		function renderDiscarded(data) {
+			const d = data.discarded;
+			if (!d || !d.count) {
+				discardNode.style.display = 'none';
+				return;
+			}
+			const span = data.to - data.from;
+			const when = (d.first === d.last)
+				? fmtTime(d.first, span)
+				: fmtTime(d.first, span) + ' \u2013 ' + fmtTime(d.last, span);
+			discardNode.style.display = '';
+			discardNode.textContent = d.count + ' ' +
+				(d.count === 1 ? _('sample was') : _('samples were')) + ' ' +
+				_('discarded as implausible') + ' (' + when + '), ' +
+				_('so that traffic is missing from the graph. A counter moved further than max_rate allows, which points at a flow offload counter glitch rather than real traffic.') + ' ' +
+				_('Run nlbw-history-collect --status for detail.');
+		}
+
 		function paint() {
 			const data = state.data;
 			if (!data || data.error) {
@@ -488,6 +509,7 @@ return view.extend({
 				chartNode.innerHTML = '';
 				tableNode.innerHTML = '';
 				hiddenNode.innerHTML = '';
+				discardNode.style.display = 'none';
 				return;
 			}
 			errorNode.style.display = 'none';
@@ -517,6 +539,7 @@ return view.extend({
 			if (data.coarse)
 				bits.push(_('protocol data is stored in coarser buckets than per-device data, so short spikes are flattened'));
 			statusNode.textContent = bits.join(' \u2014 ');
+			renderDiscarded(data);
 		}
 
 		function refresh(polled) {
@@ -568,7 +591,8 @@ return view.extend({
 					_('Pick a device to see what it was doing, or a protocol to see who was using it. Untick a row in the table, or click a legend entry, to drop it from the chart so the rest can use the full height.')),
 				hiddenNode,
 				statusNode,
-				errorNode
+				errorNode,
+				discardNode
 			]),
 			E('div', { 'class': 'cbi-section' }, [ chartNode ]),
 			E('div', { 'class': 'cbi-section' }, [ tableNode ])
