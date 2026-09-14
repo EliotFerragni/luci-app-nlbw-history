@@ -48,6 +48,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 FILES = ROOT / "package/luci-app-nlbw-history/files"
 QUERY = FILES / "usr/bin/nlbw-history-query"
 VIEW = FILES / "www/luci-static/resources/view/nlbw-history/main.js"
+CHART = FILES / "www/luci-static/resources/nlbw-history/chart.js"
 DOCS = ROOT / "docs"
 
 PERIOD = 60
@@ -289,13 +290,17 @@ def write_page(work, name, data, hidden=None, device="", protocol="", period="h2
     page = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>Bandwidth History</title>
 <style>%s</style></head><body><div id="page"></div>
+<script id="chartsrc" type="text/plain">%s</script>
 <script id="viewsrc" type="text/plain">%s</script>
 <script>
 window.FIXTURE = %s;
 try { localStorage.setItem('nlbw-history.hidden', %s); } catch (e) {}
 %s
-const mod = new Function('view', 'rpc', 'poll', 'uci', 'E', '_', 'L',
-	document.getElementById('viewsrc').textContent)(view, rpc, poll, uci, E, _, L);
+const baseclass = { extend: (o) => o };
+const chart = new Function('baseclass', 'E', '_',
+	document.getElementById('chartsrc').textContent)(baseclass, E, _);
+const mod = new Function('view', 'rpc', 'poll', 'uci', 'chart', 'E', '_', 'L',
+	document.getElementById('viewsrc').textContent)(view, rpc, poll, uci, chart, E, _, L);
 mod.load().then(function(res) {
 	const body = mod.render(res);
 	document.getElementById('page').appendChild(body);
@@ -319,7 +324,8 @@ mod.load().then(function(res) {
 		});
 	}
 });
-</script></body></html>""" % (CSS.substitute(DARK if dark else LIGHT), src, json.dumps(fixture), json.dumps(json.dumps(hidden)),
+</script></body></html>""" % (CSS.substitute(DARK if dark else LIGHT), CHART.read_text(), src,
+                              json.dumps(fixture), json.dumps(json.dumps(hidden)),
                               BOOT + (STUBS_LIVE if live else STUBS_FIXED),
                               json.dumps(bool(live)), json.dumps(device),
                               json.dumps(protocol), json.dumps(period), json.dumps(bool(live)))

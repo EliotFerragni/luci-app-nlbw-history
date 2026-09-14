@@ -3,6 +3,7 @@
 'require rpc';
 'require poll';
 'require uci';
+'require nlbw-history.chart as chart';
 
 const callSeries = rpc.declare({
 	object: 'luci_nlbw_history',
@@ -15,60 +16,28 @@ const callStatus = rpc.declare({
 	method: 'status'
 });
 
-const PALETTE = [ '#3d6fb4', '#d98032', '#4e9e6a', '#c2504f', '#7a6bab',
-                  '#3aa3a8', '#b4699b', '#8a7f6d' ];
-const OTHER_COLOR = '#9aa3ac';
+const PALETTE = chart.PALETTE;
+const OTHER_COLOR = chart.OTHER_COLOR;
 
 // range is either { hours: n } ending now, or a calendar month { year, month }.
 let state = { mac: '', protocol: '', range: { hours: 24 }, data: null, status: null };
 
-// 'si' counts in thousands and prints MB, 'iec' counts in 1024s and prints MiB.
+// Units and the clock/date formats live in the shared chart module, which is
+// what actually formats with them. These keep the names the rest of this file
+// already uses.
 let UNITS = 'si';
-
-// Clock and date order, from the router's config. 'auto' leaves both to the
-// browser's locale, which is what a fresh install does.
 let FORMATS = { time: 'auto', date: 'auto' };
 
-function loadFormats() {
-	let t, d;
-	try {
-		t = uci.get('nlbw-history', 'main', 'time_format');
-		d = uci.get('nlbw-history', 'main', 'date_format');
-	}
-	catch (e) {}
-	FORMATS = {
-		time: (t === '12' || t === '24') ? t : 'auto',
-		date: (d === 'dmy' || d === 'mdy') ? d : 'auto'
-	};
-}
-
-// hourCycle rather than hour12:false, which renders midnight as 24:00 in a
-// few locales.
-function clockOpts(opts) {
-	if (FORMATS.time === '12') return Object.assign({ hour12: true }, opts);
-	if (FORMATS.time === '24') return Object.assign({ hourCycle: 'h23' }, opts);
-	return opts;
-}
-
-// Blocked site data and private windows make localStorage throw rather than
-// come back empty, so every access goes through these two.
-function stored(key) {
-	try { return window.localStorage.getItem(key); } catch (e) { return null; }
-}
-
-function store(key, value) {
-	try { window.localStorage.setItem(key, value); } catch (e) {}
-}
-
-function loadUnits() {
-	UNITS = stored('nlbw-history.units');
-	if (UNITS !== 'si' && UNITS !== 'iec') UNITS = 'si';
-}
-
-function saveUnits(v) {
-	UNITS = v;
-	store('nlbw-history.units', v);
-}
+function loadFormats() { chart.loadFormats(uci); FORMATS = chart.formats; }
+function stored(key) { return chart.stored(key); }
+function store(key, value) { chart.store(key, value); }
+function loadUnits() { UNITS = chart.loadUnits(); }
+function saveUnits(v) { chart.saveUnits(v); UNITS = v; }
+function esc(s) { return chart.esc(s); }
+function fmtBytes(n) { return chart.fmtBytes(n); }
+function fmtRate(bps) { return chart.fmtRate(bps); }
+function fmtTime(ts, span) { return chart.fmtTime(ts, span); }
+function fmtSpan(sec) { return chart.fmtSpan(sec); }
 
 // Series taken out of the stack so the rest can use the full height, kept per
 // stacked dimension: MACs while devices are stacked, protocol names while
@@ -139,128 +108,27 @@ function monthOptions(days) {
 	return out;
 }
 
-function esc(s) {
-	return String(s).replace(/[&<>"']/g, function(c) {
-		return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-	});
-}
-
-function fmtBytes(n) {
-	const iec = (UNITS === 'iec');
-	const base = iec ? 1024 : 1000;
-	const u = iec ? [ 'B', 'KiB', 'MiB', 'GiB', 'TiB' ] : [ 'B', 'kB', 'MB', 'GB', 'TB' ];
-	let i = 0;
-	n = +n || 0;
-	while (n >= base && i < u.length - 1) { n /= base; i++; }
-	return (i === 0 || n >= 100 ? n.toFixed(0) : n.toFixed(1)) + ' ' + u[i];
-}
-
-function fmtRate(bps) {
-	if (!isFinite(bps) || bps <= 0) return '0';
-	if (bps < 1000) return bps.toFixed(0) + ' bit/s';
-	if (bps < 1e6) return (bps / 1e3).toFixed(bps < 1e5 ? 1 : 0) + ' kbit/s';
-	if (bps < 1e9) return (bps / 1e6).toFixed(bps < 1e8 ? 1 : 0) + ' Mbit/s';
-	return (bps / 1e9).toFixed(2) + ' Gbit/s';
-}
-
-function fmtDayMonth(d) {
-	const dd = ('0' + d.getDate()).slice(-2);
-	const mm = ('0' + (d.getMonth() + 1)).slice(-2);
-	if (FORMATS.date === 'dmy') return dd + '/' + mm;
-	if (FORMATS.date === 'mdy') return mm + '/' + dd;
-	return d.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
-}
-
-function fmtTime(ts, span) {
-	const d = new Date(ts * 1000);
-	if (span <= 48 * 3600)
-		return d.toLocaleTimeString([], clockOpts({ hour: '2-digit', minute: '2-digit' }));
-	return fmtDayMonth(d) + ' ' +
-	       d.toLocaleTimeString([], clockOpts({ hour: '2-digit' }));
-}
-
-function niceMax(v) {
-	if (!(v > 0)) return 1000;
-	if (UNITS === 'iec') {
-		// round up to 1, 2, 4 ... times a power of 1024, so the quarter marks
-		// stay whole numbers
-		let u = 1;
-		while (v / u >= 1024) u *= 1024;
-		let f = 1;
-		while (f < v / u) f *= 2;
-		return f * u;
-	}
-	let e = 1;
-	while (v / e >= 10) e *= 10;
-	const f = v / e;
-	return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * e;
-}
-
-function fmtSpan(sec) {
-	if (sec < 60) return Math.round(sec) + ' s';
-	if (sec < 3600) return Math.round(sec / 60) + ' min';
-	if (sec % 3600 === 0 && sec <= 86400) return (sec / 3600) + ' h';
-	return (sec / 3600).toFixed(1) + ' h';
-}
-
-// Built as an SVG string on purpose: LuCI's E() uses createElement, which
-// cannot produce namespaced SVG nodes, so appending E('svg') renders nothing.
+// Adapter over the shared stacked bar chart: this page indexes its series by
+// bucket and labels the axis in bytes, with the rate in the tooltip.
 function chartSVG(data, keys, labels, colors, field, title) {
-	const W = 1000, H = 270, L = 74, R = 14, T = 30, B = 30;
-	const pw = W - L - R, ph = H - T - B;
-	const nb = data.buckets, step = data.step || 1;
+	const step = data.step || 1;
 	const span = data.to - data.from;
-
-	let peak = 0;
-	for (let b = 0; b < nb; b++) {
-		let sum = 0;
-		for (let k of keys) sum += (data.series[k] && data.series[k][field][b]) || 0;
-		if (sum > peak) peak = sum;
-	}
-	const max = niceMax(peak);
-
-	let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block">';
-	s += '<text x="0" y="13" font-size="12" font-weight="600" fill="currentColor" fill-opacity="0.75">' + esc(title) + '</text>';
-	s += '<text x="' + (W - R) + '" y="13" text-anchor="end" font-size="11" fill="currentColor" ' +
-	     'fill-opacity="0.6">' + esc(_('per') + ' ' + fmtSpan(step)) + '</text>';
-
-	for (let i = 0; i <= 4; i++) {
-		const y = T + ph - ph * i / 4;
-		s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y.toFixed(1) + '" y2="' + y.toFixed(1) +
-		     '" stroke="currentColor" stroke-opacity="0.12"/>';
-		s += '<text x="' + (L - 8) + '" y="' + (y + 4).toFixed(1) + '" text-anchor="end" font-size="11" ' +
-		     'fill="currentColor" fill-opacity="0.7">' + esc(fmtBytes(max * i / 4)) + '</text>';
-	}
-
-	const bw = pw / nb;
-	for (let b = 0; b < nb; b++) {
-		let acc = 0;
-		for (let i = 0; i < keys.length; i++) {
-			const arr = data.series[keys[i]];
-			const v = (arr && arr[field][b]) || 0;
-			if (v <= 0) continue;
-			const h = ph * v / max;
-			const x = L + b * bw;
-			s += '<rect x="' + x.toFixed(2) + '" y="' + (T + ph - acc - h).toFixed(2) +
-			     '" width="' + Math.max(bw - 0.6, 0.6).toFixed(2) + '" height="' + h.toFixed(2) +
-			     '" fill="' + colors[i] + '"><title>' +
-			     esc(fmtTime(data.from + b * step, span) + '  ' + labels[i] + '  ' + fmtBytes(v) +
-			         '  (' + fmtRate(v * 8 / step) + ')') + '</title></rect>';
-			acc += h;
+	return chart.svg({
+		n: data.buckets,
+		keys: keys,
+		labels: labels,
+		colors: colors,
+		value: function(k, b) { return (data.series[k] && data.series[k][field][b]) || 0; },
+		fmtY: function(v) { return chart.fmtBytes(v); },
+		xLabel: function(i) { return chart.fmtTime(data.from + span * i / 6, span); },
+		title: title,
+		corner: _('per') + ' ' + chart.fmtSpan(step),
+		tip: function(k, b, v) {
+			const i = keys.indexOf(k);
+			return chart.fmtTime(data.from + b * step, span) + '  ' + labels[i] + '  ' +
+			       chart.fmtBytes(v) + '  (' + chart.fmtRate(v * 8 / step) + ')';
 		}
-	}
-
-	for (let i = 0; i <= 6; i++) {
-		const x = L + pw * i / 6;
-		const anchor = i === 0 ? 'start' : (i === 6 ? 'end' : 'middle');
-		s += '<text x="' + x.toFixed(1) + '" y="' + (H - 8) + '" text-anchor="' + anchor +
-		     '" font-size="11" fill="currentColor" fill-opacity="0.7">' +
-		     esc(fmtTime(data.from + span * i / 6, span)) + '</text>';
-	}
-
-	s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + (T + ph) + '" y2="' + (T + ph) +
-	     '" stroke="currentColor" stroke-opacity="0.3"/></svg>';
-	return s;
+	});
 }
 
 function keyLabel(data, key) {
@@ -300,23 +168,7 @@ function renderCharts(node, data, onToggle) {
 	node.innerHTML = chartSVG(data, keys, labels, colors, 'rx', _('Download') + ' ' + by) +
 	                 chartSVG(data, keys, labels, colors, 'tx', _('Upload') + ' ' + by);
 
-	const legend = E('div', { style: 'display:flex;flex-wrap:wrap;gap:6px 18px;padding:8px 0 2px;font-size:13px' });
-	keys.forEach(function(k, i) {
-		// "other" is an aggregate with no stable key behind it, so it is the
-		// one band that cannot be hidden on its own.
-		const clickable = (k !== 'other');
-		const item = E('span', {
-			style: 'display:flex;align-items:center;gap:6px' + (clickable ? ';cursor:pointer' : ''),
-			title: clickable ? _('Hide from the chart') : ''
-		}, [
-			E('i', { style: 'width:11px;height:11px;border-radius:2px;background:' + colors[i] }),
-			labels[i]
-		]);
-		if (clickable)
-			item.addEventListener('click', function() { onToggle(k); });
-		legend.appendChild(item);
-	});
-	node.appendChild(legend);
+	node.appendChild(chart.legend(keys, labels, colors, onToggle));
 }
 
 function renderTable(node, data, onPick, onToggle) {

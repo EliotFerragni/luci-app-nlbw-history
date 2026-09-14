@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-nlbw-history
-PKG_VERSION:=1.0.2
+PKG_VERSION:=1.0.3
 PKG_RELEASE:=1
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=Local build
@@ -57,6 +57,8 @@ define Package/luci-app-nlbw-history/install
 	$(INSTALL_DATA) ./files/usr/share/rpcd/acl.d/luci-app-nlbw-history.json $(1)/usr/share/rpcd/acl.d/luci-app-nlbw-history.json
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
 	$(INSTALL_DATA) ./files/usr/share/luci/menu.d/luci-app-nlbw-history.json $(1)/usr/share/luci/menu.d/luci-app-nlbw-history.json
+	$(INSTALL_DIR) $(1)/www/luci-static/resources/nlbw-history
+	$(INSTALL_DATA) ./files/www/luci-static/resources/nlbw-history/chart.js $(1)/www/luci-static/resources/nlbw-history/chart.js
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/nlbw-history
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/nlbw-history/main.js $(1)/www/luci-static/resources/view/nlbw-history/main.js
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/nlbw-history/settings.js $(1)/www/luci-static/resources/view/nlbw-history/settings.js

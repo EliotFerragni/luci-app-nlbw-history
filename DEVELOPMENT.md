@@ -62,6 +62,21 @@ tree, which is what the SDK would run. Two parts of it are easy to miss:
   An apk upgrade runs `post-upgrade` alone, so the `stop` in `postinst` is what
   replaces the running service there.
 
+## Both pages draw with one chart module
+
+`www/luci-static/resources/nlbw-history/chart.js` holds the palette, the number
+and time formatting, the stacked bar chart and the legend. The graphs page and
+the live page both pull it in with `'require nlbw-history.chart as chart'`, so
+the two charts cannot quietly stop matching each other. The graphs page keeps
+local wrappers with the old names, so the rest of that file reads as before.
+
+Only the axis differs: the graphs page charts bytes per bucket, the live page
+charts a rate, since bytes per three seconds is not a number anyone reads.
+Both state the bar width in the top right corner.
+
+`tools/preview.py` evaluates the module and injects it the way LuCI's loader
+would, so a change to either file is still checked by `--screenshots`.
+
 ## Testing a change on a router
 
 `install.sh` copies the files in place without going through a package manager
