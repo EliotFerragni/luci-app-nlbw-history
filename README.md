@@ -1,4 +1,4 @@
-# luci-app-nlbw-history 1.0.1
+# luci-app-nlbw-history 1.0.2
 
 Historical per-device bandwidth graphs for OpenWrt, built on the counters
 `nlbwmon` already collects. It samples nlbwmon on a timer, stores the delta
@@ -78,19 +78,33 @@ protocols on one side of it that are absent on the other.
 
 ## Requirements
 
-`nlbwmon` and `rpcd-mod-ucode`:
+`nlbwmon` and `rpcd-mod-ucode`. On OpenWrt 25.12 and newer:
+
+    apk add nlbwmon rpcd-mod-ucode
+
+On 24.10 and older:
 
     opkg install nlbwmon rpcd-mod-ucode
 
+Developed and verified on 24.10. 25.12 replaced opkg with apk and gets its own
+package below; nothing else about this release is specific to a version, but it
+has not been run on 25.12 hardware.
+
 ## Install
 
-**Option A: the prebuilt package.** Download
-`luci-app-nlbw-history_<version>_all.ipk` from the
-[Releases](../../releases) page. It is architecture independent, so the same
-file works on any target:
+**Option A: the prebuilt package.** Both are architecture independent, so the
+same file works on any target. Take the one your release can install, from the
+[Releases](../../releases) page.
 
-    scp luci-app-nlbw-history_1.0.1-1_all.ipk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.1-1_all.ipk'
+OpenWrt 25.12 and newer, `luci-app-nlbw-history-<version>.apk`:
+
+    scp luci-app-nlbw-history-1.0.2-r1.apk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.2-r1.apk'
+
+OpenWrt 24.10 and older, `luci-app-nlbw-history_<version>_all.ipk`:
+
+    scp luci-app-nlbw-history_1.0.2-1_all.ipk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.2-1_all.ipk'
 
 **Option B: no package manager.** Copy the source tree to the router and run
 `install.sh` on it:

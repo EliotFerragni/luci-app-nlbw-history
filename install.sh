@@ -28,10 +28,15 @@ if [ "$1" = "--remove" ]; then
 fi
 
 [ -d /etc/init.d ] || { echo "This does not look like an OpenWrt system."; exit 1; }
-[ -x /usr/sbin/nlbw ] || echo "Warning: /usr/sbin/nlbw not found - install nlbwmon first."
+
+# 25.12 replaced opkg with apk, and no release has both.
+if command -v apk >/dev/null 2>&1; then PKG_ADD="apk add"; else PKG_ADD="opkg install"; fi
+
+[ -x /usr/sbin/nlbw ] || \
+	echo "Warning: /usr/sbin/nlbw not found. Run $PKG_ADD nlbwmon, or there are no counters to sample."
 
 command -v ucode >/dev/null 2>&1 || [ -f /usr/lib/rpcd/ucode.so ] || \
-	echo "Warning: rpcd-mod-ucode does not seem to be installed; the LuCI page will have no backend."
+	echo "Warning: rpcd-mod-ucode does not seem to be installed; the LuCI page will have no backend. Run $PKG_ADD rpcd-mod-ucode."
 
 for f in $FILES; do
 	mkdir -p "$(dirname "$f")"
