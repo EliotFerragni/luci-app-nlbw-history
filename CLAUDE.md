@@ -159,3 +159,12 @@ Worth not repeating:
   SIGQUIT to ignore, and a trap cannot be set for a signal already ignored on
   entry. procd sends TERM then KILL, so that is the path that matters, but it
   does mean a test harness using `&` cannot exercise the INT path at all.
+- **An `rpc.declare` that named fewer params than the call site passed.** The
+  live view declared `params: [ 'device' ]` and called it with a device and a
+  service. LuCI maps positional arguments against that list by index, so the
+  service was dropped on the floor: no error, no warning, the filter simply did
+  nothing while the table still appeared to react. Every rpc signature is now
+  checked against the ucode method's `args` in CI. Note that a test harness
+  which stubs `rpc.declare` to resolve a fixed fixture cannot catch this at
+  all, because it never exercises the argument mapping; the stub has to map
+  positional arguments the way LuCI does and call the real backend.

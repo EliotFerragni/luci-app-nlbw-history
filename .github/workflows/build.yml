@@ -27,6 +27,32 @@ jobs:
           for f in package/luci-app-nlbw-history/files/www/luci-static/resources/view/nlbw-history/*.js; do
             node --check "$f" || exit 1
           done
+      - name: rpc signatures
+        run: |
+          python3 - <<'EOF'
+          import re, pathlib, sys
+          uc = pathlib.Path("package/luci-app-nlbw-history/files/usr/share/rpcd/ucode/luci.nlbw_history.uc").read_text()
+          backend = {}
+          for m in re.finditer(r'(\w+):\s*\{\s*args:\s*\{([^}]*)\}', uc):
+              backend[m.group(1)] = [k.strip() for k in re.findall(r'(\w+)\s*:', m.group(2))]
+          bad = 0
+          views = pathlib.Path("package/luci-app-nlbw-history/files/www/luci-static/resources/view/nlbw-history")
+          for f in sorted(views.glob("*.js")):
+              for m in re.finditer(r"rpc\.declare\(\{(.*?)\}\)", f.read_text(), re.S):
+                  blk = m.group(1)
+                  meth = re.search(r"method:\s*'(\w+)'", blk)
+                  prm = re.search(r"params:\s*\[([^\]]*)\]", blk)
+                  if not meth:
+                      continue
+                  declared = [x.strip().strip("'") for x in prm.group(1).split(',') if x.strip()] if prm else []
+                  expect = backend.get(meth.group(1))
+                  if expect is None:
+                      print("%s: no such ubus method %s" % (f.name, meth.group(1))); bad += 1
+                  elif declared != expect:
+                      print("%s: %s declares %s, backend takes %s" % (f.name, meth.group(1), declared, expect)); bad += 1
+          sys.exit(1 if bad else 0)
+          EOF
+
       - name: JSON syntax
         run: |
           for f in package/luci-app-nlbw-history/files/usr/share/rpcd/acl.d/*.json \
