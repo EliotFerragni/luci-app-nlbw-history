@@ -4,7 +4,14 @@
 
 . /lib/functions.sh
 
+# procd signals this script, not the children it happens to be waiting on, so
+# the sleep below has to be taken down explicitly. Left alone it is reparented
+# and lingers for the rest of the interval, which is a stray process after every
+# stop, restart and package upgrade, and up to an hour of one at a high period.
+SLEEP_PID=
+
 flush_and_exit() {
+	[ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" 2>/dev/null
 	/usr/bin/nlbw-history-collect --flush >/dev/null 2>&1
 	exit 0
 }
@@ -29,5 +36,7 @@ while :; do
 	[ "$_sleep" -lt 2 ] && _sleep=$((_sleep + PERIOD))
 
 	sleep "$_sleep" &
-	wait $!
+	SLEEP_PID=$!
+	wait "$SLEEP_PID"
+	SLEEP_PID=
 done

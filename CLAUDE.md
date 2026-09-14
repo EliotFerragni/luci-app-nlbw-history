@@ -150,3 +150,12 @@ Worth not repeating:
   the default rule run `make` in an empty directory and fail.
 - Forgetting `/tmp/luci-modulecache` when clearing LuCI caches, so a newly
   installed page stays invisible until something else invalidates it.
+- **Leaving the `sleep` behind on shutdown.** procd signals the script, not the
+  children it happens to be parked on, so `sleep "$_sleep" & wait $!` left a
+  reparented `sleep` alive for the rest of the interval after every stop,
+  restart and upgrade, and for up to an hour at a high `period`. The loop now
+  keeps the pid and kills it from the trap. Note that `trap … INT` is inert
+  whenever the script is started as a shell background job: `&` sets SIGINT and
+  SIGQUIT to ignore, and a trap cannot be set for a signal already ignored on
+  entry. procd sends TERM then KILL, so that is the path that matters, but it
+  does mean a test harness using `&` cannot exercise the INT path at all.
