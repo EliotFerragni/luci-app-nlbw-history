@@ -1,0 +1,506 @@
+#!/bin/sh
+# Live per-device bandwidth, read from conntrack rather than from nlbwmon.
+#
+#   nlbw-history-live [mac]      print the ring as JSON, and keep the sampler up
+#   nlbw-history-live --daemon   the sampler loop itself, started on demand
+#   nlbw-history-live --status   diagnostics
+#
+# nlbwmon is not used here and nothing is stored: this is a live view and the
+# whole ring lives in /tmp. The history graphs keep reading nlbwmon exactly as
+# before, because only nlbwmon subscribes to conntrack's DESTROY events and so
+# only nlbwmon sees flows that open and close between two samples. Polling
+# cannot see those at all, which is fine for bandwidth (the traffic that moves
+# the needle is long lived and present in every sample) and would be a
+# systematic undercount for accounting.
+#
+# Reading conntrack directly is what makes a live view possible. nlbwmon folds
+# live flows in on its own refresh_interval, 30s by default, so a per-second
+# graph off nlbwmon would be 29 empty bars and a spike. conntrack itself is
+# fresher: the flowtable gc runs every second and asks the driver for offloaded
+# flow counters once a flow has aged past a tenth of
+# net.netfilter.nf_conntrack_tcp_timeout_offload, which is 30s by default, so
+# offloaded traffic lands about every 3s. Lower that sysctl for finer bars.
+#
+# The sampler runs only while the page is polling and exits on its own after
+# that stops, so nothing runs in the background when nobody is looking.
+
+. /lib/functions.sh
+
+config_load nlbw-history
+config_get LIVE_INTERVAL main live_interval 3
+config_get LIVE_WINDOW main live_window 180
+config_get MAX_RATE main max_rate 10000
+
+case "$LIVE_INTERVAL" in ''|*[!0-9]*) LIVE_INTERVAL=3 ;; esac
+case "$LIVE_WINDOW" in ''|*[!0-9]*) LIVE_WINDOW=180 ;; esac
+case "$MAX_RATE" in ''|*[!0-9]*) MAX_RATE=10000 ;; esac
+[ "$LIVE_INTERVAL" -lt 1 ] && LIVE_INTERVAL=1
+[ "$LIVE_INTERVAL" -gt 60 ] && LIVE_INTERVAL=60
+[ "$LIVE_WINDOW" -lt 30 ] && LIVE_WINDOW=30
+[ "$LIVE_WINDOW" -gt 3600 ] && LIVE_WINDOW=3600
+
+RUN=/tmp/nlbw-history
+RING="$RUN/live.ring"
+STATE="$RUN/live.state"
+WANT="$RUN/live.want"
+PIDFILE="$RUN/live.pid"
+TOP=8
+
+# Stop sampling once nothing has asked for a while. Generous enough that a
+# slow page or a backgrounded tab does not keep restarting the sampler.
+IDLE=$((LIVE_INTERVAL * 5))
+[ "$IDLE" -lt 20 ] && IDLE=20
+
+mkdir -p "$RUN" || exit 1
+
+# conntrack -L goes over netlink; the proc file makes the kernel format the
+# whole table as text, which is far more expensive on a big one. Either is
+# parsed the same way, since both print the same key=value tuples.
+if command -v conntrack >/dev/null 2>&1; then
+	SOURCE=conntrack
+elif [ -r /proc/net/nf_conntrack ]; then
+	SOURCE=procfs
+else
+	SOURCE=none
+fi
+
+dump_conntrack() {
+	case "$SOURCE" in
+		conntrack) conntrack -L 2>/dev/null ;;
+		procfs)    cat /proc/net/nf_conntrack 2>/dev/null ;;
+		*)         return 1 ;;
+	esac
+}
+
+# ip -> mac for everything on the link. This doubles as the test for which end
+# of a flow is the local device: the neighbour table holds exactly the hosts
+# reachable here, so no subnet arithmetic is needed and IPv6 costs nothing
+# extra. A device busy enough to chart is never missing from it.
+neigh_map() {
+	if command -v ip >/dev/null 2>&1; then
+		ip neigh show 2>/dev/null | awk '$1 != "" && $5 ~ /^([0-9a-fA-F]{2}:){5}/ { print $1 "\t" tolower($5) }'
+	fi
+	[ -r /proc/net/arp ] && awk 'NR > 1 && $4 ~ /^([0-9a-fA-F]{2}:){5}/ && $4 != "00:00:00:00:00:00" { print $1 "\t" tolower($4) }' /proc/net/arp
+}
+
+# Names: DHCP leases win over static host entries, both optional. Kept
+# identical to nlbw-history-query so a device is named the same on both pages.
+names_map() {
+	uci -q show dhcp 2>/dev/null | tr -d "\047" | awk '
+		{
+			e = index($0, "="); if (!e) next
+			v = substr($0, e + 1); k = substr($0, 1, e - 1)
+			p = split(k, kp, "."); if (p < 3) next
+			s = kp[2]; f = kp[p]
+			if (f == "mac") m[s] = v; else if (f == "name") n[s] = v
+		}
+		END { for (s in m) if (n[s] != "") print tolower(m[s]) "\t" n[s] }'
+	[ -f /tmp/dhcp.leases ] && awk '$4 != "*" && $4 != "" { print tolower($2) "\t" $4 }' /tmp/dhcp.leases
+}
+
+sample() {
+	_now=$1
+	_neigh="$RUN/live.neigh.$$"
+	neigh_map > "$_neigh" 2>/dev/null
+
+	dump_conntrack | awk -v now="$_now" -v state="$STATE" -v newstate="$STATE.new" \
+	    -v ring="$RING" -v neigh="$_neigh" -v maxrate="$MAX_RATE" -v elapsed="$2" '
+	BEGIN {
+		while ((getline l < neigh) > 0) {
+			split(l, a, "\t")
+			if (a[1] != "" && a[2] != "") mac[a[1]] = a[2]
+		}
+		close(neigh)
+		while ((getline l < state) > 0) {
+			n = split(l, a, "\t")
+			if (n >= 3) { po[a[1]] = a[2] + 0; pr[a[1]] = a[3] + 0; known[a[1]] = 1 }
+		}
+		close(state)
+		cap = (maxrate > 0 && elapsed > 0) ? maxrate * 125000 * elapsed : 0
+	}
+	{
+		# conntrack -L starts at the protocol name, the proc file puts the
+		# address family first. Everything after is the same key=value tuples,
+		# original direction first and reply second.
+		proto = ($1 ~ /^ipv[46]$/) ? $3 : $1
+		ns = nd = np = nq = nb = 0
+		osrc = odst = osport = odport = ""
+		ob = rb = 0
+		for (i = 1; i <= NF; i++) {
+			f = $i
+			if (substr(f, 1, 4) == "src=") { if (++ns == 1) osrc = substr(f, 5) }
+			else if (substr(f, 1, 4) == "dst=") { if (++nd == 1) odst = substr(f, 5) }
+			else if (substr(f, 1, 6) == "sport=") { if (++np == 1) osport = substr(f, 7) }
+			else if (substr(f, 1, 6) == "dport=") { if (++nq == 1) odport = substr(f, 7) }
+			else if (substr(f, 1, 6) == "bytes=") {
+				nb++
+				if (nb == 1) ob = substr(f, 7) + 0
+				else if (nb == 2) rb = substr(f, 7) + 0
+			}
+		}
+		nrows++
+		if (nb == 0) next
+		nacct++
+		if (osrc == "" || odst == "") next
+
+		# The original direction runs away from whichever end is local, so it
+		# is that device uploading and the reply is it downloading.
+		if (osrc in mac)      { dev = mac[osrc]; tx = ob; rx = rb }
+		else if (odst in mac) { dev = mac[odst]; rx = ob; tx = rb }
+		else next
+
+		# The original destination port identifies the protocol in both
+		# directions: outbound it is the remote one, inbound it is the local
+		# one being served. Stored raw and named at emit time, so the sampler
+		# never has to read a name file.
+		# ":" and not "/": this label reaches the sanitiser in the ucode
+		# backend, where a slash would need escaping inside a regex bracket
+		# expression, and that is where the ucode lexer has bitten before.
+		# No apostrophes in here either: this awk program is single quoted.
+		pkey = (odport != "") ? (proto ":" odport) : proto
+		k = proto "|" osrc "|" osport "|" odst "|" odport
+		printf "%s\t%.0f\t%.0f\n", k, tx, rx > newstate
+		# A flow seen for the first time contributes nothing: it may have been
+		# running long before the sampler started, and counting its whole
+		# counter would draw one enormous bar. The cost is one bar for a
+		# genuinely new flow, which a sustained transfer more than outlives.
+		# No apostrophes in here: this awk program is single quoted.
+		if (!(k in known)) next
+		# A counter going backwards means the tuple was reused by a new flow,
+		# so the current value is the traffic since.
+		dtx = (tx >= po[k]) ? tx - po[k] : tx
+		drx = (rx >= pr[k]) ? rx - pr[k] : rx
+		if (dtx <= 0 && drx <= 0) next
+		TX[dev] += dtx; RX[dev] += drx
+		SK[dev SUBSEP pkey] = dev; SV[dev SUBSEP pkey] = pkey
+		SRX[dev SUBSEP pkey] += drx; STX[dev SUBSEP pkey] += dtx
+	}
+	END {
+		# Only when the whole table has no counters at all: an odd line
+		# without them is normal, a table without them means acct is off.
+		if (nrows > 0 && nacct == 0) { print "noacct" > (ring ".flag"); exit 3 }
+		for (i in SK) {
+			d = SK[i]
+			# Same ceiling the sampler applies to nlbwmon, for the same
+			# reason: an offload counter glitch lands here first. Judged on
+			# the device total, so one ceiling covers both dimensions.
+			if (cap > 0 && (RX[d] > cap || TX[d] > cap)) continue
+			if (SRX[i] <= 0 && STX[i] <= 0) continue
+			printf "%d\t%s\t%s\t%.0f\t%.0f\n", now, d, SV[i], SRX[i], STX[i] >> ring
+		}
+	}
+	'
+	_rc=$?
+	rm -f "$_neigh"
+	[ -f "$STATE.new" ] && mv "$STATE.new" "$STATE"
+	return $_rc
+}
+
+# Drop anything older than the window. Single writer, so no locking.
+trim_ring() {
+	_cut=$(( $1 - LIVE_WINDOW ))
+	[ -s "$RING" ] || return 0
+	awk -v c="$_cut" '$1 + 0 >= c' "$RING" > "$RING.new" && mv "$RING.new" "$RING"
+}
+
+daemon() {
+	# One sampler at a time.
+	if [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+		exit 0
+	fi
+	echo $$ > "$PIDFILE"
+
+	# procd is not involved here, but the same rule applies: a signal reaches
+	# this script and not the sleep it is parked on, so the sleep has to be
+	# taken down by hand or it outlives the sampler.
+	SLEEP_PID=
+	cleanup() {
+		[ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" 2>/dev/null
+		rm -f "$PIDFILE" "$STATE" "$STATE.new"
+		exit 0
+	}
+	trap cleanup INT TERM
+
+	_prev=0
+	while :; do
+		_now=$(date +%s)
+		_el=0
+		[ "$_prev" -gt 0 ] && [ "$_now" -gt "$_prev" ] && _el=$((_now - _prev))
+		sample "$_now" "$_el"
+		_prev=$_now
+		trim_ring "$_now"
+
+		_want=$(cat "$WANT" 2>/dev/null)
+		case "$_want" in ''|*[!0-9]*) _want=0 ;; esac
+		[ $((_now - _want)) -gt "$IDLE" ] && break
+
+		sleep "$LIVE_INTERVAL" &
+		SLEEP_PID=$!
+		wait "$SLEEP_PID"
+		SLEEP_PID=
+	done
+	rm -f "$PIDFILE" "$STATE" "$STATE.new"
+	exit 0
+}
+
+running() {
+	[ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+}
+
+status() {
+	echo "source:          $SOURCE"
+	case "$SOURCE" in
+		none) echo "                 no conntrack access: install the conntrack package or enable CONFIG_NF_CONNTRACK_PROCFS" ;;
+	esac
+	if [ -f "$RING.flag" ]; then
+		echo "accounting:      off, no byte counters in conntrack"
+		echo "                 enable with: sysctl -w net.netfilter.nf_conntrack_acct=1"
+	else
+		echo "accounting:      on"
+	fi
+	echo "interval:        ${LIVE_INTERVAL}s"
+	echo "window:          ${LIVE_WINDOW}s"
+	if running; then
+		echo "sampler:         running (pid $(cat "$PIDFILE"))"
+	else
+		echo "sampler:         idle, starts when the Live page is open"
+	fi
+	echo "ring:            $(cat "$RING" 2>/dev/null | wc -l | tr -d ' ') rows"
+	_off=$(sysctl -n net.netfilter.nf_conntrack_tcp_timeout_offload 2>/dev/null)
+	[ -n "$_off" ] && echo "offload writeback: about $((_off / 10))s (a tenth of nf_conntrack_tcp_timeout_offload=$_off)"
+}
+
+# JSON for the view: a time axis and one series per device, the same shape the
+# history query returns so both charts can be drawn the same way.
+# proto:port -> protocol name. nlbwmon's own table first, so a protocol is
+# called the same thing on both pages: its names and /etc/services disagree on
+# most of what a home network actually sends, 443/udp being QUIC rather than
+# https and 80/tcp HTTP rather than www. nlbwmon is a hard dependency, so the
+# file is always there, and reading it at runtime picks up whatever list the
+# installed version ships.
+#
+# /etc/services then fills in the ports nlbwmon does not carry, which is most
+# of them: 46 entries against 172. Emitted second and the reader keeps the
+# first name it sees, so nlbwmon wins wherever both know a port.
+protocols_map() {
+	if [ -r /usr/share/nlbwmon/protocols ]; then
+		awk '!/^#/ && NF >= 3 {
+			if ($1 == 6) p = "tcp"
+			else if ($1 == 17) p = "udp"
+			else if ($1 == 1) p = "icmp"
+			else if ($1 == 58) p = "icmpv6"
+			else if ($1 == 2) p = "igmp"
+			else next
+			nm = $3
+			for (i = 4; i <= NF; i++) nm = nm " " $i
+			print (($2 + 0 > 0) ? (p ":" $2) : p) "\t" nm
+		}' /usr/share/nlbwmon/protocols
+	fi
+	if [ -r /etc/services ]; then
+		awk '!/^#/ && NF >= 2 {
+			n = split($2, a, "/")
+			if (n == 2 && a[1] != "" && a[2] != "") print a[2] ":" a[1] "\t" $1
+		}' /etc/services
+	fi
+	return 0
+}
+
+emit() {
+	_names="$RUN/live.names.$$"
+	names_map > "$_names" 2>/dev/null
+	_protos="$RUN/live.protos.$$"
+	protocols_map > "$_protos" 2>/dev/null
+
+	awk -v win="$LIVE_WINDOW" -v iv="$LIVE_INTERVAL" -v top="$TOP" -v now="$1" \
+	    -v src="$SOURCE" -v run="$2" -v acct="$3" -v namefile="$_names" \
+	    -v protofile="$_protos" -v onlymac="$4" -v onlyproto="$5" '
+	BEGIN {
+		while ((getline l < namefile) > 0) {
+			split(l, a, "\t")
+			if (a[1] != "" && a[2] != "") name[a[1]] = a[2]
+		}
+		close(namefile)
+		while ((getline l < protofile) > 0) {
+			split(l, a, "\t")
+			if (a[1] != "" && a[2] != "" && !(a[1] in protoname)) protoname[a[1]] = a[2]
+		}
+		close(protofile)
+		# Protocols when a single device is selected, devices otherwise. The
+		# same split the graphs page makes between devices and protocols,
+		# decided from the same pair of filters.
+		bykey = (onlymac != "" && onlyproto == "") ? "proto" : "mac"
+	}
+	function jstr(s,   i, c, out) {
+		out = ""
+		for (i = 1; i <= length(s); i++) {
+			c = substr(s, i, 1)
+			if (c == "\"" || c == "\\") out = out "\\" c
+			else if (c ~ /[[:cntrl:]]/) out = out " "
+			else out = out c
+		}
+		return out
+	}
+	{
+		ts = $1 + 0; d = $2; sv = $3; vr = $4 + 0; vt = $5 + 0
+		if (!(ts in tseen)) { tseen[ts] = 1; nt++; tlist[nt] = ts }
+		nm = (sv in protoname) ? protoname[sv] : sv
+
+		# Each list is what the other filter leaves: the devices using the
+		# selected protocol, the protocols used by that device. That is
+		# how the graphs page fills its two dropdowns.
+		if (onlyproto == "" || nm == onlyproto) {
+			drx[d] += vr; dtx[d] += vt
+			dtot[d] += vr + vt; seendev[d] = 1
+			DRX[d, ts] += vr; DTX[d, ts] += vt
+		}
+		if (onlymac == "" || d == onlymac) {
+			prx[nm] += vr; ptx[nm] += vt
+			ptot[nm] += vr + vt; seenproto[nm] = 1
+			PRX[nm, ts] += vr; PTX[nm, ts] += vt
+		}
+
+		if (onlymac != "" && d != onlymac) next
+		if (onlyproto != "" && nm != onlyproto) next
+		k = (bykey == "proto") ? nm : d
+		RX[k, ts] += vr; TX[k, ts] += vt
+		tot[k] += vr + vt; seen[k] = 1
+	}
+	END {
+		# insertion sort, busybox awk has no asort
+		for (i = 2; i <= nt; i++) {
+			k = tlist[i]
+			for (j = i - 1; j >= 1 && tlist[j] > k; j--) tlist[j + 1] = tlist[j]
+			tlist[j + 1] = k
+		}
+		nk = 0
+		for (d in seen) { nk++; ord[nk] = d }
+		for (i = 2; i <= nk; i++) {
+			k = ord[i]
+			for (j = i - 1; j >= 1 && tot[ord[j]] < tot[k]; j--) ord[j + 1] = ord[j]
+			ord[j + 1] = k
+		}
+		nshow = (nk > top) ? top : nk
+		for (i = nshow + 1; i <= nk; i++)
+			for (t = 1; t <= nt; t++) {
+				RX["\002other", tlist[t]] += RX[ord[i], tlist[t]]
+				TX["\002other", tlist[t]] += TX[ord[i], tlist[t]]
+			}
+
+		nd = 0
+		for (d in seendev) { nd++; dord[nd] = d }
+		for (i = 2; i <= nd; i++) {
+			k = dord[i]
+			for (j = i - 1; j >= 1 && dtot[dord[j]] < dtot[k]; j--) dord[j + 1] = dord[j]
+			dord[j + 1] = k
+		}
+
+		ns = 0
+		for (d in seenproto) { ns++; pord[ns] = d }
+		for (i = 2; i <= ns; i++) {
+			k = pord[i]
+			for (j = i - 1; j >= 1 && ptot[pord[j]] < ptot[k]; j--) pord[j + 1] = pord[j]
+			pord[j + 1] = k
+		}
+
+		printf "{\"now\":%d,\"interval\":%d,\"window\":%d,", now, iv, win
+		printf "\"source\":\"%s\",\"sampler\":\"%s\",\"accounting\":%s,", \
+			jstr(src), jstr(run), acct
+		printf "\"mode\":\"%s\",\"device\":\"%s\",\"protocol\":\"%s\",", \
+			(bykey == "proto" ? "protocols" : "devices"), jstr(onlymac), jstr(onlyproto)
+		printf "\"times\":["
+		for (t = 1; t <= nt; t++) printf "%s%d", (t > 1 ? "," : ""), tlist[t]
+		printf "],\"devices\":["
+		last = (nt > 0) ? tlist[nt] : 0
+		lastspan = (nt > 1) ? (tlist[nt] - tlist[nt - 1]) : iv
+		if (lastspan <= 0) lastspan = iv
+		for (i = 1; i <= nd; i++) {
+			d = dord[i]
+			printf "%s{\"mac\":\"%s\",\"name\":\"%s\",\"rx\":%.0f,\"tx\":%.0f,", \
+				(i > 1 ? "," : ""), jstr(d), jstr((d in name) ? name[d] : d), drx[d], dtx[d]
+			printf "\"rx_now\":%.0f,\"tx_now\":%.0f,\"total\":%.0f,\"charted\":%s}", \
+				DRX[d, last], DTX[d, last], dtot[d], \
+				((bykey == "mac" && i <= nshow) ? "true" : "false")
+		}
+		printf "],\"protocols\":["
+		for (i = 1; i <= ns; i++) {
+			d = pord[i]
+			printf "%s{\"name\":\"%s\",\"rx\":%.0f,\"tx\":%.0f,", \
+				(i > 1 ? "," : ""), jstr(d), prx[d], ptx[d]
+			printf "\"rx_now\":%.0f,\"tx_now\":%.0f,\"total\":%.0f,\"charted\":%s}", \
+				PRX[d, last], PTX[d, last], ptot[d], \
+				((bykey == "proto" && i <= nshow) ? "true" : "false")
+		}
+		printf "],\"last_span\":%d", lastspan
+		printf ",\"series\":{"
+		sep = ""
+		for (i = 1; i <= nshow; i++) {
+			d = ord[i]
+			printf "%s\"%s\":{\"rx\":[", sep, jstr(d)
+			for (t = 1; t <= nt; t++) printf "%s%.0f", (t > 1 ? "," : ""), RX[d, tlist[t]]
+			printf "],\"tx\":["
+			for (t = 1; t <= nt; t++) printf "%s%.0f", (t > 1 ? "," : ""), TX[d, tlist[t]]
+			printf "]}"
+			sep = ","
+		}
+		if (nk > nshow) {
+			printf "%s\"other\":{\"rx\":[", sep
+			for (t = 1; t <= nt; t++) printf "%s%.0f", (t > 1 ? "," : ""), RX["\002other", tlist[t]]
+			printf "],\"tx\":["
+			for (t = 1; t <= nt; t++) printf "%s%.0f", (t > 1 ? "," : ""), TX["\002other", tlist[t]]
+			printf "]}"
+		}
+		printf "}}\n"
+	}
+	' "$RING" /dev/null
+	rm -f "$_names" "$_protos"
+}
+
+case "$1" in
+	--daemon) daemon ;;
+	--status) status; exit 0 ;;
+esac
+
+# Optional device filter. Only ever reaches awk through -v, but keep it to the
+# characters a MAC can contain all the same.
+ONLYMAC=$(printf '%s' "${1:-}" | tr 'A-Z' 'a-z' | sed 's/[^0-9a-f:]//g')
+case "$ONLYMAC" in
+	'' ) ;;
+	[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) ;;
+	* ) ONLYMAC='' ;;
+esac
+
+# Protocol names come from nlbwmon's table or /etc/services and can carry a
+# space, a dot or a slash. Only ever handed to awk through -v, but keep it to
+# those characters anyway, which also removes any quote.
+ONLYPROTO=$(printf '%s' "${2:-}" | sed 's/[^0-9A-Za-z._+: -]//g' | cut -c1-40)
+
+# A poll both answers the page and keeps the sampler alive. Starting it here
+# rather than from a service means nothing samples when nobody is watching.
+NOW=$(date +%s)
+echo "$NOW" > "$WANT"
+
+if [ "$SOURCE" = none ]; then
+	echo '{"error":"No access to conntrack. Install the conntrack package, or build with CONFIG_NF_CONNTRACK_PROCFS."}'
+	exit 0
+fi
+
+if ! running; then
+	rm -f "$RING.flag"
+	# Detached, or rpcd would sit waiting on the sampler for as long as it runs.
+	setsid "$0" --daemon >/dev/null 2>&1 </dev/null &
+fi
+
+ACCT=true
+[ -f "$RING.flag" ] && ACCT=false
+RUNSTATE=starting
+running && RUNSTATE=running
+
+if [ -s "$RING" ]; then
+	emit "$NOW" "$RUNSTATE" "$ACCT" "$ONLYMAC" "$ONLYPROTO"
+else
+	printf '{"now":%d,"interval":%d,"window":%d,"source":"%s","sampler":"%s","accounting":%s,"mode":"%s","device":"%s","protocol":"%s","times":[],"devices":[],"protocols":[],"last_span":%d,"series":{}}\n' \
+		"$NOW" "$LIVE_INTERVAL" "$LIVE_WINDOW" "$SOURCE" "$RUNSTATE" "$ACCT" \
+		"$([ -n "$ONLYMAC" ] && [ -z "$ONLYPROTO" ] && echo protocols || echo devices)" \
+		"$ONLYMAC" "$ONLYPROTO" "$LIVE_INTERVAL"
+fi
+exit 0

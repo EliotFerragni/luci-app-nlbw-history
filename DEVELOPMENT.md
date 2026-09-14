@@ -77,6 +77,35 @@ Both state the bar width in the top right corner.
 `tools/preview.py` evaluates the module and injects it the way LuCI's loader
 would, so a change to either file is still checked by `--screenshots`.
 
+## The live view is a separate path
+
+The Live tab does not go through nlbwmon at all. `nlbw-history-live` polls
+conntrack, resolves the local end of each flow through the neighbour table
+(which doubles as the test for which end is local, so there is no subnet
+arithmetic and IPv6 costs nothing extra), diffs per flow against a snapshot in
+`/tmp` and appends per device totals to a ring buffer there.
+
+The ring carries a protocol dimension (`ts mac proto:port rx tx`) so that
+selecting a device can restack by protocol without a second pass over
+conntrack. Both pages say protocol, and both take the name from the same
+place, so the two cannot end up calling one thing by two names. Ports are
+named at emit time, never in the sampler, so the busy loop never reads a name
+file and the names follow whatever is installed.
+`/usr/share/nlbwmon/protocols` is consulted first so both pages agree, then
+`/etc/services` for the ports it does not carry, then the raw `tcp:443`.
+
+The sampler is started by a poll rather than by procd, and exits on its own
+once polling stops, so nothing samples when nobody is watching. The ring is
+server side on purpose: if each browser tab diffed against its own snapshot,
+two open tabs would each consume part of the delta and both would draw about
+half the real traffic.
+
+Off a router it is testable the same way everything else is. Point the dump at
+a file of synthetic conntrack lines and the neighbour lookup at a fixture, then
+run the real script; `tools/` has no harness for it yet, but the parser takes
+both `conntrack -L` and `/proc/net/nf_conntrack` formats, which differ only in
+the leading fields.
+
 ## Testing a change on a router
 
 `install.sh` copies the files in place without going through a package manager

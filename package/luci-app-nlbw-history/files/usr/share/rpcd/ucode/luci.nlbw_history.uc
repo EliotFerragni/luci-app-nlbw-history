@@ -8,6 +8,7 @@ const fs = require('fs');
 
 const QUERY = '/usr/bin/nlbw-history-query';
 const COLLECT = '/usr/bin/nlbw-history-collect';
+const LIVE = '/usr/bin/nlbw-history-live';
 
 function run(cmd) {
 	let p = fs.popen(cmd, 'r');
@@ -74,6 +75,37 @@ function scrub(req) {
 	return { output: run(`${COLLECT} --scrub${apply} 2>&1`) };
 }
 
+// The poll doubles as the signal that keeps the on demand sampler alive.
+// Only a MAC goes through, and only after the same scrubbing the series call
+// gives its own, because it reaches a shell command line.
+function live(req) {
+	let args = req.args || {};
+	let mac = lc(replace('' + (args.device || ''), /[^0-9A-Fa-f:]/g, ''));
+
+	if (length(mac) != 17)
+		mac = '';
+
+	// Protocol names can carry a space, a dot or a colon, so the class is wider
+	// than the MAC's. It still drops every quote, which is what keeps it safe
+	// on the command line. Deliberately no slash in here: escaping one inside
+	// a bracket expression is where ucode's lexer has bitten before, so the
+	// unnamed-port labels use a colon instead.
+	let proto = replace('' + (args.protocol || ''), /[^0-9A-Za-z._+: -]/g, '');
+
+	if (length(proto) > 40)
+		proto = substr(proto, 0, 40);
+
+	let out = run(`${LIVE} '${mac}' '${proto}' 2>/dev/null`);
+	let data = null;
+
+	try { data = json(out); } catch (e) { data = null; }
+
+	if (type(data) != 'object')
+		return { error: 'The live sampler returned nothing. Check nlbw-history-live --status.' };
+
+	return data;
+}
+
 function status() {
 	let out = run(`${COLLECT} --status 2>&1`);
 	let info = {};
@@ -100,6 +132,10 @@ return {
 		scrub: {
 			args: { apply: false },
 			call: scrub
+		},
+		live: {
+			args: { device: '', protocol: '' },
+			call: live
 		}
 	}
 };

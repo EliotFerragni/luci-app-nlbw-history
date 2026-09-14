@@ -3,7 +3,7 @@
 		"description": "Read historical per-device bandwidth data and manage its settings",
 		"read": {
 			"ubus": {
-				"luci_nlbw_history": [ "series", "status" ]
+				"luci_nlbw_history": [ "series", "status", "live" ]
 			},
 			"uci": [ "nlbw-history" ]
 		},

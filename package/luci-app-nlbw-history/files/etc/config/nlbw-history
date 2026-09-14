@@ -21,6 +21,13 @@ config nlbw_history 'main'
 	# traffic. Set it to the fastest link a device here can use. 0 accepts
 	# every sample.
 	option max_rate '10000'
+	# The Live tab reads conntrack directly, not nlbwmon, and stores nothing.
+	# Seconds per bar. Offloaded flows only reach conntrack about every 3s, a
+	# tenth of net.netfilter.nf_conntrack_tcp_timeout_offload, so finer bars
+	# than that need that sysctl lowered as well.
+	option live_interval '3'
+	# Seconds of live history kept in RAM, which is how wide the chart is.
+	option live_window '180'
 	# Display only. auto follows the browser's locale; 24 or 12 force the
 	# clock, dmy prints 31/12 and mdy prints 12/31.
 	option time_format 'auto'

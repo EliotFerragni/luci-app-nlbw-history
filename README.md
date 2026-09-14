@@ -1,11 +1,13 @@
-# luci-app-nlbw-history 1.0.3
+# luci-app-nlbw-history 1.0.4
 
 Historical per-device bandwidth graphs for OpenWrt, built on the counters
 `nlbwmon` already collects. It samples nlbwmon on a timer, stores the delta
-between samples, and draws it in LuCI under **Services → Bandwidth History**, with a *Graphs* tab and a *Settings* tab.
+between samples, and draws it in LuCI under **Services → Bandwidth History**,
+with a *Graphs* tab, a *Live* tab and a *Settings* tab.
 
-It only talks to nlbwmon over its control socket. No packet inspection, no
-firewall rules, no effect on software or hardware flow offloading.
+The history only talks to nlbwmon over its control socket. The Live tab reads
+conntrack directly and stores nothing. Neither does packet inspection, adds a
+firewall rule, or has any effect on software or hardware flow offloading.
 
 ![The graphs page, every device stacked over the last 24 hours](docs/graphs-overview.png)
 
@@ -38,6 +40,58 @@ The period dropdown holds the usual relative windows, up to the last 30 days,
 and below them one entry per calendar month that retention can still reach. A
 long history is therefore read a month at a time: the window never gets wider
 than about a month, which is what keeps a query affordable on a router.
+
+## Live view
+
+The **Live** tab answers a different question: what is moving *right now*. It
+reads conntrack directly instead of nlbwmon, stores nothing at all, and samples
+only while the page is open. Close the tab and the sampler shuts itself down.
+
+The two dropdowns work like the ones on the graphs page, and the names in the
+table are the quick route into them: pick a device and the chart restacks by
+protocol, pick a protocol and it restacks by the devices using it. Clicking a
+name in the table sets the same filter. The **Units** dropdown switches the
+rates between bits and bytes per second, `Mbit/s` by default because that is
+how link speeds are quoted. The Total column stays in bytes either way, since
+it is a volume and not a rate.
+
+Protocols here are named from the connection's destination port, looked up in
+three places:
+
+1. `/usr/share/nlbwmon/protocols`, so a protocol is called the same thing here
+   as on the graphs page. That matters more than it sounds: nlbwmon calls
+   443/udp QUIC and 80/tcp HTTP where `/etc/services` says `https` and `www`.
+2. `/etc/services`, for the many ports nlbwmon does not carry. It has around
+   170 entries against nlbwmon's 46.
+3. the port itself, as `tcp:27015`, when neither knows it.
+
+That is a port lookup, not deep packet inspection, so it says what a
+connection looks like rather than what it is. Anything on 443 reads as HTTPS
+whatever is inside it.
+
+nlbwmon cannot drive this. It folds ongoing connections into its counters on
+its own `refresh_interval`, 30 seconds by default, so a per-second graph built
+on it would be twenty-nine empty bars and one spike. conntrack is much fresher:
+the kernel's flowtable garbage collector runs every second and asks the driver
+for offloaded connections' counters once a flow has aged past a tenth of
+`net.netfilter.nf_conntrack_tcp_timeout_offload`. That sysctl defaults to 30
+seconds, so **offloaded traffic reaches conntrack in roughly 3 second steps**.
+
+That is the real floor on resolution, not the poll rate. Bars finer than about
+3 seconds need the sysctl lowered too:
+
+    sysctl -w net.netfilter.nf_conntrack_tcp_timeout_offload=10
+
+The same value decides when an idle offloaded connection is dropped from the
+flowtable, so low numbers churn it harder. 10 is a reasonable floor.
+
+Two things the live view is not. It is not accounting: a connection that opens
+and closes between two samples is never seen, which is why the history graphs
+keep using nlbwmon, the only thing here that subscribes to conntrack's teardown
+events. And it needs byte counters in conntrack, which the page tells you
+about if they are off:
+
+    sysctl -w net.netfilter.nf_conntrack_acct=1
 
 Working on it rather than running it? See [DEVELOPMENT.md](DEVELOPMENT.md)
 for the build, the CI and the release procedure.
@@ -98,13 +152,13 @@ same file works on any target. Take the one your release can install, from the
 
 OpenWrt 25.12 and newer, `luci-app-nlbw-history-<version>.apk`:
 
-    scp luci-app-nlbw-history-1.0.3-r1.apk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.3-r1.apk'
+    scp luci-app-nlbw-history-1.0.4-r1.apk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.4-r1.apk'
 
 OpenWrt 24.10 and older, `luci-app-nlbw-history_<version>_all.ipk`:
 
-    scp luci-app-nlbw-history_1.0.3-1_all.ipk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.3-1_all.ipk'
+    scp luci-app-nlbw-history_1.0.4-1_all.ipk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.4-1_all.ipk'
 
 **Option B: no package manager.** Copy the source tree to the router and run
 `install.sh` on it:
@@ -143,6 +197,8 @@ The same options live in `/etc/config/nlbw-history` if you prefer the shell:
 | `protocols` | `1` | also record per-protocol traffic |
 | `protocol_interval` | `900` | seconds per stored protocol bucket |
 | `max_rate` | `10000` | Mbit/s; samples implying more than this are discarded, `0` disables |
+| `live_interval` | `3` | seconds per bar on the Live tab; see [Live view](#live-view) |
+| `live_window` | `180` | seconds of live history kept in RAM |
 | `time_format` | `auto` | clock on the graphs: `auto`, `24` or `12` |
 | `date_format` | `auto` | date order on the graphs: `auto`, `dmy` or `mdy` |
 
@@ -265,10 +321,13 @@ the graph is leaving out.
     /usr/bin/nlbw-history-loop                               sampling loop
     /usr/bin/nlbw-history-collect                            one sample, flush, status
     /usr/bin/nlbw-history-query                              aggregation into JSON
+    /usr/bin/nlbw-history-live                               live view, reads conntrack
     /usr/share/rpcd/ucode/luci.nlbw_history.uc               ubus backend
     /usr/share/rpcd/acl.d/luci-app-nlbw-history.json         ACL
     /usr/share/luci/menu.d/luci-app-nlbw-history.json        menu entry
+    /www/luci-static/resources/nlbw-history/chart.js         palette, formatting, the chart
     /www/luci-static/resources/view/nlbw-history/main.js     the graphs page
+    /www/luci-static/resources/view/nlbw-history/live.js     the live page
     /www/luci-static/resources/view/nlbw-history/settings.js the settings page
     <data_dir>/YYYY-MM-DD.tsv                                history: epoch, mac, rx, tx
     <data_dir>/YYYY-MM-DD.proto.tsv                          history: epoch, mac, protocol, rx, tx
