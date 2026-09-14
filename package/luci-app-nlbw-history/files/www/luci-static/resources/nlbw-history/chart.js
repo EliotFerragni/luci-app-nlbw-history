@@ -1,7 +1,7 @@
 'use strict';
 'require baseclass';
 
-// Everything the graphs page and the live page draw in common: the palette,
+// Everything the history page and the live page draw in common: the palette,
 // the number formatting, and the stacked bar chart itself. Both pages have to
 // look like one app, and a second copy of a 120 line SVG builder is how two
 // charts quietly stop matching.

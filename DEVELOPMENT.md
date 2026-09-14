@@ -65,12 +65,12 @@ tree, which is what the SDK would run. Two parts of it are easy to miss:
 ## Both pages draw with one chart module
 
 `www/luci-static/resources/nlbw-history/chart.js` holds the palette, the number
-and time formatting, the stacked bar chart and the legend. The graphs page and
+and time formatting, the stacked bar chart and the legend. The history page and
 the live page both pull it in with `'require nlbw-history.chart as chart'`, so
-the two charts cannot quietly stop matching each other. The graphs page keeps
+the two charts cannot quietly stop matching each other. The history page keeps
 local wrappers with the old names, so the rest of that file reads as before.
 
-Only the axis differs: the graphs page charts bytes per bucket, the live page
+Only the axis differs: the history page charts bytes per bucket, the live page
 charts a rate, since bytes per three seconds is not a number anyone reads.
 Both state the bar width in the top right corner.
 
@@ -125,7 +125,7 @@ stubbed `nlbw`, and `nlbw-history-query` against synthetic day files.
     python3 tools/preview.py
 
 That puts the LuCI page on `http://127.0.0.1:8099` and is the fastest way to
-work on `main.js`. It writes synthetic history in the format the sampler
+work on `history.js`. It writes synthetic history in the format the sampler
 stores, and answers the page's rpc calls by running the real
 `nlbw-history-query` against it, so the device, protocol and period filters
 behave as they do on a router. Nothing about the page is reimplemented: the

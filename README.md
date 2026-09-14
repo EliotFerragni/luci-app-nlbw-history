@@ -1,15 +1,15 @@
-# luci-app-nlbw-history 1.0.5
+# luci-app-nlbw-history 1.0.6
 
 Historical per-device bandwidth graphs for OpenWrt, built on the counters
 `nlbwmon` already collects. It samples nlbwmon on a timer, stores the delta
 between samples, and draws it in LuCI under **Services → Bandwidth History**,
-with a *Graphs* tab, a *Live* tab and a *Settings* tab.
+with a *History* tab, a *Live* tab and a *Settings* tab.
 
 The history only talks to nlbwmon over its control socket. The Live tab reads
 conntrack directly and stores nothing. Neither does packet inspection, adds a
 firewall rule, or has any effect on software or hardware flow offloading.
 
-![The graphs page, every device stacked over the last 24 hours](docs/graphs-overview.png)
+![The history page, every device stacked over the last 24 hours](docs/history-overview.png)
 
 The page shows every device stacked, so you can see who was using the line at
 any moment. Two filters change what gets stacked:
@@ -21,7 +21,7 @@ any moment. Two filters change what gets stacked:
 
 Either filter can also be set by clicking a row in the table underneath.
 
-![One device selected, so the chart stacks by protocol instead](docs/graphs-device.png)
+![One device selected, so the chart stacks by protocol instead](docs/history-device.png)
 
 One device can easily pull a hundred times what the rest of the house does,
 and a stacked chart scaled to it flattens everything else onto the baseline.
@@ -34,7 +34,7 @@ was recorded, not what is drawn. The choice is remembered in the browser, per
 device and, when a device is selected, per protocol; **show all** above the
 graph clears it.
 
-![The same window with the two busiest devices hidden, so the rest can use the full height](docs/graphs-hidden.png)
+![The same window with the two busiest devices hidden, so the rest can use the full height](docs/history-hidden.png)
 
 The period dropdown holds the usual relative windows, up to the last 30 days,
 and below them one entry per calendar month that retention can still reach. A
@@ -47,7 +47,7 @@ The **Live** tab answers a different question: what is moving *right now*. It
 reads conntrack directly instead of nlbwmon, stores nothing at all, and samples
 only while the page is open. Close the tab and the sampler shuts itself down.
 
-The two dropdowns work like the ones on the graphs page, and the names in the
+The two dropdowns work like the ones on the history page, and the names in the
 table are the quick route into them: pick a device and the chart restacks by
 protocol, pick a protocol and it restacks by the devices using it. Clicking a
 name in the table sets the same filter. The **Units** dropdown switches the
@@ -59,7 +59,7 @@ Protocols here are named from the connection's destination port, looked up in
 three places:
 
 1. `/usr/share/nlbwmon/protocols`, so a protocol is called the same thing here
-   as on the graphs page. That matters more than it sounds: nlbwmon calls
+   as on the history page. That matters more than it sounds: nlbwmon calls
    443/udp QUIC and 80/tcp HTTP where `/etc/services` says `https` and `www`.
 2. `/etc/services`, for the many ports nlbwmon does not carry. It has around
    170 entries against nlbwmon's 46.
@@ -152,13 +152,13 @@ same file works on any target. Take the one your release can install, from the
 
 OpenWrt 25.12 and newer, `luci-app-nlbw-history-<version>.apk`:
 
-    scp luci-app-nlbw-history-1.0.5-r1.apk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.5-r1.apk'
+    scp luci-app-nlbw-history-1.0.6-r1.apk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.6-r1.apk'
 
 OpenWrt 24.10 and older, `luci-app-nlbw-history_<version>_all.ipk`:
 
-    scp luci-app-nlbw-history_1.0.5-1_all.ipk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.5-1_all.ipk'
+    scp luci-app-nlbw-history_1.0.6-1_all.ipk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.6-1_all.ipk'
 
 **Option B: no package manager.** Copy the source tree to the router and run
 `install.sh` on it:
@@ -284,7 +284,7 @@ recorded in it. The per-device figures keep full resolution.
 
 **The LuCI page is missing from the menu**
 
-    ls /www/luci-static/resources/view/nlbw-history/main.js
+    ls /www/luci-static/resources/view/nlbw-history/history.js
     ls /usr/share/luci/menu.d/luci-app-nlbw-history.json
     rm -rf /tmp/luci-indexcache /tmp/luci-indexcache.* /tmp/luci-modulecache
     /etc/init.d/rpcd restart
@@ -326,7 +326,7 @@ the graph is leaving out.
     /usr/share/rpcd/acl.d/luci-app-nlbw-history.json         ACL
     /usr/share/luci/menu.d/luci-app-nlbw-history.json        menu entry
     /www/luci-static/resources/nlbw-history/chart.js         palette, formatting, the chart
-    /www/luci-static/resources/view/nlbw-history/main.js     the graphs page
+    /www/luci-static/resources/view/nlbw-history/history.js     the history page
     /www/luci-static/resources/view/nlbw-history/live.js     the live page
     /www/luci-static/resources/view/nlbw-history/settings.js the settings page
     <data_dir>/YYYY-MM-DD.tsv                                history: epoch, mac, rx, tx

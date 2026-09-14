@@ -20,7 +20,7 @@ const OTHER_COLOR = chart.OTHER_COLOR;
 let state = { data: null, paused: false, mac: '', proto: '' };
 
 // Devices taken out of the stack so the rest can use the full height. Kept
-// apart from the graphs page's own set: the two pages answer different
+// apart from the history page's own set: the two pages answer different
 // questions, and something hidden because it dwarfs a month of history is not
 // necessarily something you want gone from a live chart.
 // Whether a rate reads in bits or in bytes. Bits by default, which is how
@@ -68,7 +68,7 @@ function saveHidden() {
 	}));
 }
 
-// The table follows whatever is stacked, as it does on the graphs page.
+// The table follows whatever is stacked, as it does on the history page.
 function stackRows(data) {
 	return ((dimOf(data) === 'protocols') ? data.protocols : data.devices) || [];
 }
@@ -96,7 +96,7 @@ function stackedBy(data) {
 
 // Bars hold bytes, the axis holds a rate: this page answers "how fast right
 // now", where bytes per three seconds is not a number anyone reads. The bar
-// width is stated in the corner the same way the graphs page states it.
+// width is stated in the corner the same way the history page states it.
 function ratesOf(data, field) {
 	const times = data.times || [];
 	const out = {};

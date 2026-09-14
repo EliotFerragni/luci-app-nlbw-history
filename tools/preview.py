@@ -3,7 +3,7 @@
 
 Nothing here reimplements the page. It writes synthetic history in the format
 the sampler stores, aggregates it with the real nlbw-history-query, and runs
-the real main.js behind stubs shaped like LuCI's E, rpc, uci, view and poll.
+the real history.js behind stubs shaped like LuCI's E, rpc, uci, view and poll.
 
     python3 tools/preview.py                  # serve the page, click around
     python3 tools/preview.py --dark           # in LuCI's dark theme
@@ -47,7 +47,7 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FILES = ROOT / "package/luci-app-nlbw-history/files"
 QUERY = FILES / "usr/bin/nlbw-history-query"
-VIEW = FILES / "www/luci-static/resources/view/nlbw-history/main.js"
+VIEW = FILES / "www/luci-static/resources/view/nlbw-history/history.js"
 CHART = FILES / "www/luci-static/resources/nlbw-history/chart.js"
 DOCS = ROOT / "docs"
 
@@ -483,7 +483,7 @@ def main():
     for name, q, page_args in shots:
         data = run_query(work, query, q["args"])
         page = write_page(work, name, data, formats=formats, dark=args.dark, **page_args)
-        shoot(work, page, DOCS / ("graphs-%s.png" % name))
+        shoot(work, page, DOCS / ("history-%s.png" % name))
 
     finish(work, args)
 

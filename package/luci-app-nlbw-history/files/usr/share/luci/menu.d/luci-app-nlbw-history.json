@@ -10,12 +10,12 @@
 		}
 	},
 
-	"admin/services/nlbw-history/graphs": {
-		"title": "Graphs",
+	"admin/services/nlbw-history/history": {
+		"title": "History",
 		"order": 1,
 		"action": {
 			"type": "view",
-			"path": "nlbw-history/main"
+			"path": "nlbw-history/history"
 		},
 		"depends": {
 			"acl": [ "luci-app-nlbw-history" ]

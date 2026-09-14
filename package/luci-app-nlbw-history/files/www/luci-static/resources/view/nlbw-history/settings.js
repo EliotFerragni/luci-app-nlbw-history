@@ -150,7 +150,8 @@ return view.extend({
 
 		o = s.option(form.Value, 'flush_interval', _('Write to storage every'),
 			_('Seconds. Samples are buffered in RAM and written out in batches so the router ' +
-			  'is not writing to flash every interval. Graphs still include the buffered samples. ' +
+			  'is not writing to flash every interval. The graphs still include the buffered ' +
+			  'samples. ' +
 			  'A hard power cut loses at most this much history.'));
 		o.datatype = 'range(30,86400)';
 		o.placeholder = '600';

@@ -111,7 +111,7 @@ is requested so the bars stay contiguous rather than leaving gaps.
   it is the main diagnostic path for a device with no console.
 - `nlbw-history-collect --status` is the single diagnostic entry point. It is
   surfaced by `/etc/init.d/nlbw-history status`, by the LuCI settings tab and
-  by the graphs page status line. New failure modes should show up there.
+  by the history page status line. New failure modes should show up there.
 - New config options need updating in four places: `files/etc/config/…`, the
   reader in the shell scripts, the settings form, and the README table.
 - Build with `./build-ipk.sh`. It needs no OpenWrt SDK. The package is
@@ -129,10 +129,10 @@ There is no test suite. What works:
   check timing, output size and all four filter combinations (no filter,
   device, protocol, both).
 - The whole view runs outside a router: `python3 tools/preview.py` serves the
-  real `main.js` behind LuCI shaped stubs, with its rpc calls answered by the
+  real `history.js` behind LuCI shaped stubs, with its rpc calls answered by the
   real query script over synthetic history, so the filters work. Same script,
   `--screenshots`, writes the README images. Smaller pieces can also be
-  evaluated in node directly, since `main.js` is a plain module body.
+  evaluated in node directly, since `history.js` is a plain module body.
 
 The two things that cannot be tested here are the ucode backend, which needs
 rpcd, and the LuCI forms, which need a browser. Keep the ucode file small and
