@@ -97,17 +97,56 @@ function stackedBy(data) {
 // Bars hold bytes, the axis holds a rate: this page answers "how fast right
 // now", where bytes per three seconds is not a number anyone reads. The bar
 // width is stated in the corner the same way the history page states it.
-function ratesOf(data, field) {
+//
+// The axis is the whole configured window ending now, always, not just the
+// samples collected so far. Drawn the other way the first bars are enormous
+// and shrink with every poll until the window fills, which reads as the
+// traffic changing when only the scale is. Samples land in the slot their
+// timestamp falls in and the rest stay empty, so bars keep their width and
+// scroll leftwards out of the window.
+function slotsOf(data) {
+	const iv = data.interval || 1;
+	const win = data.window || iv * 60;
+	// Capped for the same reason the history query caps its buckets: past a
+	// few hundred the rectangles cost more than the detail is worth.
+	const n = Math.max(2, Math.min(400, Math.round(win / iv)));
 	const times = data.times || [];
-	const out = {};
-	for (let k of Object.keys(data.series || {})) {
+	const now = data.now || times[times.length - 1] || 0;
+	return { n: n, win: win, slot: win / n, from: now - win, now: now };
+}
+
+// Bytes per slot and seconds covered per slot, so a sample that spanned more
+// than one interval still reports the rate it actually ran at.
+function ratesOf(data, field, sl) {
+	const times = data.times || [];
+	const keys = Object.keys(data.series || {});
+	const out = {}, span = [];
+
+	for (let k of keys) {
 		out[k] = [];
-		for (let i = 0; i < times.length; i++) {
-			let span = (i > 0) ? (times[i] - times[i - 1]) : data.interval;
-			if (!(span > 0)) span = data.interval || 1;
-			out[k][i] = (data.series[k][field][i] || 0) / span;
-		}
+		for (let i = 0; i < sl.n; i++) out[k][i] = 0;
 	}
+	for (let i = 0; i < sl.n; i++) span[i] = 0;
+
+	for (let i = 0; i < times.length; i++) {
+		// Counted back from now rather than forward from the window start, so
+		// the newest slot is the one ending at now. Measuring forward puts a
+		// sample taken exactly at now one past the last slot, and clamping it
+		// back then merges it with the sample before it.
+		const back = Math.floor((sl.now - times[i]) / sl.slot);
+		if (back < 0 || back >= sl.n) continue;
+		const j = sl.n - 1 - back;
+		let sp = (i > 0) ? (times[i] - times[i - 1]) : data.interval;
+		if (!(sp > 0)) sp = data.interval || 1;
+		span[j] += sp;
+		for (let k of keys)
+			out[k][j] += (data.series[k] && data.series[k][field][i]) || 0;
+	}
+
+	for (let k of keys)
+		for (let i = 0; i < sl.n; i++)
+			out[k][i] = (span[i] > 0) ? (out[k][i] / span[i]) : 0;
+
 	return out;
 }
 
@@ -137,24 +176,24 @@ function renderCharts(node, data, onToggle) {
 	const labels = keys.map(keyLabel);
 	const corner = _('per') + ' ' + chart.fmtSpan(data.interval || 1);
 
+	const sl = slotsOf(data);
+
 	function one(field, title) {
-		const rate = ratesOf(data, field);
+		const rate = ratesOf(data, field, sl);
 		return chart.svg({
-			n: times.length,
+			n: sl.n,
 			keys: keys,
 			labels: labels,
 			colors: colors,
 			value: function(k, i) { return (rate[k] && rate[k][i]) || 0; },
 			fmtY: function(v) { return fmtR(v); },
-			xLabel: function(i) {
-				const j = Math.min(Math.round(i * (times.length - 1) / 6), times.length - 1);
-				return chart.fmtClock(times[j]);
-			},
+			xLabel: function(i) { return chart.fmtClock(sl.from + sl.win * i / 6); },
 			title: title,
 			corner: corner,
 			tip: function(k, i, v) {
 				const ki = keys.indexOf(k);
-				return chart.fmtClock(times[i]) + '  ' + labels[ki] + '  ' + fmtR(v);
+				return chart.fmtClock(sl.now - (sl.n - 1 - i) * sl.slot) + '  ' +
+				       labels[ki] + '  ' + fmtR(v);
 			}
 		});
 	}
