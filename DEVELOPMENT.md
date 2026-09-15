@@ -80,10 +80,10 @@ would, so a change to either file is still checked by `--screenshots`.
 ## The live view is a separate path
 
 The Live tab does not go through nlbwmon at all. `nlbw-history-live` polls
-conntrack, resolves the local end of each flow through the neighbour table
-(which doubles as the test for which end is local, so there is no subnet
-arithmetic and IPv6 costs nothing extra), diffs per flow against a snapshot in
-`/tmp` and appends per device totals to a ring buffer there.
+conntrack, decides which end of each flow is local, diffs per flow against a
+snapshot in `/tmp` and appends per device totals to a ring buffer there. The
+neighbour table only turns the local address into a MAC, and stands in as the
+local/remote test when nlbwmon's subnet list cannot be resolved.
 
 The ring carries a protocol dimension (`ts mac proto:port rx tx`) so that
 selecting a device can restack by protocol without a second pass over
@@ -112,6 +112,42 @@ a file of synthetic conntrack lines and the neighbour lookup at a fixture, then
 run the real script; `tools/` has no harness for it yet, but the parser takes
 both `conntrack -L` and `/proc/net/nf_conntrack` formats, which differ only in
 the leading fields.
+
+## Why the live chart is shaped the way it is
+
+**nlbwmon is too coarse to drive it.** It folds ongoing connections into its
+counters on its own `refresh_interval`, 30 seconds by default, so a per-second
+graph built on it would be twenty-nine empty bars and one spike. conntrack is
+much fresher, which is the whole reason the Live tab exists.
+
+**But conntrack is not smooth either.** The flowtable garbage collector runs
+every second and asks the driver for an offloaded flow's counters once that
+flow has aged past a tenth of
+`net.netfilter.nf_conntrack_tcp_timeout_offload`, 30 seconds by default. So
+offloaded traffic lands in roughly three second steps, per flow and on each
+flow's own phase. That is the real floor on resolution, not the poll rate, and
+it is confirmed on MT7988, whose `mtk_soc_data` sets `has_accounting`.
+
+**Reading a stepped signal at roughly the step period aliases**: an empty bar,
+then a double one, over and over. There is nothing to synchronise to.
+`nf_ct_acct_add()` is two atomic adds, there is no conntrack event for a
+counter update (the `ip_conntrack_events` enum has none), and the flows are
+phased independently anyway. So each reading is instead spread across the span
+it accumulated in, meaning back to the previous non-zero reading for that same
+key. Totals stay exact. The spread is capped at ten seconds, because an active
+flow reports every few seconds, so a key silent for longer was genuinely idle
+and its resumption should not be painted back over the quiet.
+
+**The bars sit on absolute clock boundaries**, not measured back from whenever
+the page last polled. Measured back, the grid shifts a fraction of a bar on
+every poll, every sample rebuckets, bars deep in the past change for no reason,
+and two browsers polling a moment apart draw different charts from identical
+data. On a fixed grid the boundaries are the same everywhere and the grid only
+ever advances a whole bar.
+
+The residue is that the newest few bars keep moving for about ten seconds
+while late readings arrive. A wider bar removes even that: at ten seconds or
+more each bar contains several writebacks and needs no spreading.
 
 ## Testing a change on a router
 
