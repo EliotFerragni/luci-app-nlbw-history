@@ -94,6 +94,13 @@ file and the names follow whatever is installed.
 `/usr/share/nlbwmon/protocols` is consulted first so both pages agree, then
 `/etc/services` for the ports it does not carry, then the raw `tcp:443`.
 
+Which end of a flow is local comes from nlbwmon's `local_network` list, read
+out of its UCI config and resolved the way its init script does, so both pages
+count the same traffic: exactly one end inside, or the flow is skipped. The
+matching is done in awk without bit operators, so IPv4 divides by the host
+count instead of masking and IPv6 is compared as its 32 expanded hex digits,
+with a nibble comparison for a prefix length that is not a multiple of four.
+
 The sampler is started by a poll rather than by procd, and exits on its own
 once polling stops, so nothing samples when nobody is watching. The ring is
 server side on purpose: if each browser tab diffed against its own snapshot,

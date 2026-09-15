@@ -1,4 +1,4 @@
-# luci-app-nlbw-history 1.0.6
+# luci-app-nlbw-history 1.0.7
 
 Historical per-device bandwidth graphs for OpenWrt, built on the counters
 `nlbwmon` already collects. It samples nlbwmon on a timer, stores the delta
@@ -85,6 +85,18 @@ That is the real floor on resolution, not the poll rate. Bars finer than about
 The same value decides when an idle offloaded connection is dropped from the
 flowtable, so low numbers churn it harder. 10 is a reasonable floor.
 
+It counts the same traffic the History page does, because it applies nlbwmon's
+own rule off nlbwmon's own config: a flow is counted only when **exactly one**
+end is inside `local_network` in `/etc/config/nlbwmon`. Interface names there
+are resolved the way nlbwmon's init script resolves them. So LAN to LAN
+transfers and traffic to the router itself never appear on either page, and
+neither does traffic between two remote hosts.
+
+If that list cannot be resolved, the live page falls back to treating anything
+in the neighbour table as local, which counts slightly too much rather than
+showing nothing at all. `nlbw-history-live --status` says which of the two is
+in effect and lists the subnets it found.
+
 Two things the live view is not. It is not accounting: a connection that opens
 and closes between two samples is never seen, which is why the history graphs
 keep using nlbwmon, the only thing here that subscribes to conntrack's teardown
@@ -152,13 +164,13 @@ same file works on any target. Take the one your release can install, from the
 
 OpenWrt 25.12 and newer, `luci-app-nlbw-history-<version>.apk`:
 
-    scp luci-app-nlbw-history-1.0.6-r1.apk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.6-r1.apk'
+    scp luci-app-nlbw-history-1.0.7-r1.apk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.7-r1.apk'
 
 OpenWrt 24.10 and older, `luci-app-nlbw-history_<version>_all.ipk`:
 
-    scp luci-app-nlbw-history_1.0.6-1_all.ipk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.6-1_all.ipk'
+    scp luci-app-nlbw-history_1.0.7-1_all.ipk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.7-1_all.ipk'
 
 **Option B: no package manager.** Copy the source tree to the router and run
 `install.sh` on it:

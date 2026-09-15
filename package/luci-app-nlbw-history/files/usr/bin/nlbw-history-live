@@ -72,6 +72,42 @@ dump_conntrack() {
 	esac
 }
 
+# The subnets nlbwmon itself accounts for, resolved the way its init script
+# does: a local_network entry holding a dot or a colon is a CIDR, anything else
+# is a logical interface name to look up. Reading nlbwmon's own config rather
+# than guessing is what keeps the two pages counting the same traffic.
+_subnet_one() {
+	case "$1" in
+		*.*|*:*) echo "$1" ;;
+		*)
+			network_get_subnets _r "$1" 2>/dev/null && for _x in $_r; do echo "$_x"; done
+			network_get_subnets6 _r "$1" 2>/dev/null && for _x in $_r; do echo "$_x"; done
+			;;
+	esac
+}
+
+_subnet_section() { config_list_foreach "$1" local_network _subnet_one; }
+
+local_subnets() {
+	command -v network_get_subnets >/dev/null 2>&1 || . /lib/functions/network.sh 2>/dev/null
+	config_load nlbwmon 2>/dev/null || return 0
+	config_foreach _subnet_section nlbwmon
+}
+
+# Refreshed on a timer rather than every sample: resolving an interface name
+# goes through ubus, and a subnet does not move very often.
+SUBNETS="$RUN/live.subnets"
+SUBNET_TTL=60
+
+refresh_subnets() {
+	_age=$(( $1 - $(sed -n 1p "$SUBNETS.stamp" 2>/dev/null || echo 0) ))
+	[ -s "$SUBNETS" ] && [ "$_age" -lt "$SUBNET_TTL" ] && return 0
+	local_subnets > "$SUBNETS.new" 2>/dev/null
+	mv "$SUBNETS.new" "$SUBNETS" 2>/dev/null
+	echo "$1" > "$SUBNETS.stamp"
+	return 0
+}
+
 # ip -> mac for everything on the link. This doubles as the test for which end
 # of a flow is the local device: the neighbour table holds exactly the hosts
 # reachable here, so no subnet arithmetic is needed and IPv6 costs nothing
@@ -100,12 +136,74 @@ names_map() {
 
 sample() {
 	_now=$1
+	refresh_subnets "$_now"
 	_neigh="$RUN/live.neigh.$$"
 	neigh_map > "$_neigh" 2>/dev/null
 
 	dump_conntrack | awk -v now="$_now" -v state="$STATE" -v newstate="$STATE.new" \
-	    -v ring="$RING" -v neigh="$_neigh" -v maxrate="$MAX_RATE" -v elapsed="$2" '
+	    -v ring="$RING" -v neigh="$_neigh" -v maxrate="$MAX_RATE" -v elapsed="$2" \
+	    -v subfile="$SUBNETS" '
+	function pad4(x) { while (length(x) < 4) x = "0" x; return x }
+	# An IPv6 address as its full 32 hex digits, so a prefix is a string
+	# compare. busybox awk has no bit operators, which is also why the v4 test
+	# below divides instead of masking.
+	function v6hex(a,   i, L, R, nl, nr, GL, GR, G, n, out) {
+		a = tolower(a)
+		if (index(a, "::")) {
+			i = index(a, "::")
+			L = substr(a, 1, i - 1); R = substr(a, i + 2)
+			nl = (L == "") ? 0 : split(L, GL, ":")
+			nr = (R == "") ? 0 : split(R, GR, ":")
+			out = ""
+			for (i = 1; i <= nl; i++) out = out pad4(GL[i])
+			for (i = nl + nr; i < 8; i++) out = out "0000"
+			for (i = 1; i <= nr; i++) out = out pad4(GR[i])
+			return out
+		}
+		n = split(a, G, ":")
+		out = ""
+		for (i = 1; i <= n; i++) out = out pad4(G[i])
+		return out
+	}
+	function hexval(c) { return index("0123456789abcdef", c) - 1 }
+	function v4int(a,   P) { split(a, P, "."); return ((P[1] * 256 + P[2]) * 256 + P[3]) * 256 + P[4] }
+	function in_subnet(a,   i, h, d, nf, sh) {
+		if (index(a, ":")) {
+			h = v6hex(a)
+			for (i = 1; i <= n6; i++) {
+				nf = int(P6[i] / 4)
+				if (nf > 0 && substr(h, 1, nf) != substr(B6[i], 1, nf)) continue
+				if (P6[i] % 4) {
+					sh = 2 ^ (4 - P6[i] % 4)
+					if (int(hexval(substr(h, nf + 1, 1)) / sh) != \
+					    int(hexval(substr(B6[i], nf + 1, 1)) / sh)) continue
+				}
+				return 1
+			}
+			return 0
+		}
+		h = v4int(a)
+		for (i = 1; i <= n4; i++) {
+			if (P4[i] <= 0) return 1
+			d = 2 ^ (32 - P4[i])
+			if (int(h / d) == int(B4[i] / d)) return 1
+		}
+		return 0
+	}
 	BEGIN {
+		# sa and sp, not a and p: the neighbour loop below splits into a[],
+		# and awk will not let the same name be a scalar here and an array
+		# there.
+		while ((getline l < subfile) > 0) {
+			if (l == "") continue
+			si = index(l, "/")
+			if (si > 0) { sa = substr(l, 1, si - 1); sp = substr(l, si + 1) + 0 }
+			else { sa = l; sp = -1 }
+			if (index(sa, ":")) { n6++; B6[n6] = v6hex(sa); P6[n6] = (sp < 0) ? 128 : sp }
+			else { n4++; B4[n4] = v4int(sa); P4[n4] = (sp < 0) ? 32 : sp }
+		}
+		close(subfile)
+		haveSubnets = (n4 + n6) > 0
 		while ((getline l < neigh) > 0) {
 			split(l, a, "\t")
 			if (a[1] != "" && a[2] != "") mac[a[1]] = a[2]
@@ -143,11 +241,28 @@ sample() {
 		nacct++
 		if (osrc == "" || odst == "") next
 
-		# The original direction runs away from whichever end is local, so it
-		# is that device uploading and the reply is it downloading.
-		if (osrc in mac)      { dev = mac[osrc]; tx = ob; rx = rb }
-		else if (odst in mac) { dev = mac[odst]; rx = ob; tx = rb }
-		else next
+		# nlbwmon counts a flow only when exactly one end is inside the
+		# configured subnets, so LAN to LAN and device to router traffic never
+		# reaches its database. Same rule here, off the same config, or the
+		# two pages would disagree about what a device sent.
+		#
+		# Without a usable subnet list this falls back to the neighbour table,
+		# because a live page showing nothing at all is a worse answer than a
+		# live page counting slightly too much. The status output says which.
+		if (haveSubnets) {
+			sl = in_subnet(osrc); dl = in_subnet(odst)
+			if (sl == dl) next
+			if (sl) { devip = osrc; tx = ob; rx = rb }
+			else    { devip = odst; rx = ob; tx = rb }
+		}
+		else {
+			if (osrc in mac)      { devip = osrc; tx = ob; rx = rb }
+			else if (odst in mac) { devip = odst; rx = ob; tx = rb }
+			else next
+		}
+		# The neighbour table only names the device now; a host it has not
+		# seen is charted under its address rather than dropped.
+		dev = (devip in mac) ? mac[devip] : devip
 
 		# The original destination port identifies the protocol in both
 		# directions: outbound it is the remote one, inbound it is the local
@@ -257,6 +372,20 @@ status() {
 		echo "                 enable with: sysctl -w net.netfilter.nf_conntrack_acct=1"
 	else
 		echo "accounting:      on"
+	fi
+	# Resolved here and not read from the cache: status is what someone runs
+	# to find out why the page looks wrong, and the sampler may never have run.
+	refresh_subnets "$(date +%s)"
+	# grep -c prints its count and still exits 1 when it matched nothing, so
+	# an || here would append a second number rather than supply a default.
+	_ns=$(cat "$SUBNETS" 2>/dev/null | grep -c .)
+	case "$_ns" in ''|*[!0-9]*) _ns=0 ;; esac
+	if [ "$_ns" -gt 0 ]; then
+		echo "local subnets:   $_ns from nlbwmon, counting a flow only when one end is inside"
+		sed 's/^/                 /' "$SUBNETS" 2>/dev/null
+	else
+		echo "local subnets:   none resolved from nlbwmon, falling back to the neighbour table"
+		echo "                 check: uci show nlbwmon | grep local_network"
 	fi
 	echo "interval:        ${LIVE_INTERVAL}s"
 	echo "window:          ${LIVE_WINDOW}s"
