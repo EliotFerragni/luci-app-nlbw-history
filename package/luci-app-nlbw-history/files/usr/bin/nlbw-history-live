@@ -380,12 +380,12 @@ status() {
 	# an || here would append a second number rather than supply a default.
 	_ns=$(cat "$SUBNETS" 2>/dev/null | grep -c .)
 	case "$_ns" in ''|*[!0-9]*) _ns=0 ;; esac
+	# One line, and the key's own colon comes first, so the ubus backend can
+	# still split this on it even though an IPv6 prefix is full of colons.
 	if [ "$_ns" -gt 0 ]; then
-		echo "local subnets:   $_ns from nlbwmon, counting a flow only when one end is inside"
-		sed 's/^/                 /' "$SUBNETS" 2>/dev/null
+		echo "local subnets:   $(tr '\n' ' ' < "$SUBNETS" | sed 's/  *$//; s/  */, /g')"
 	else
-		echo "local subnets:   none resolved from nlbwmon, falling back to the neighbour table"
-		echo "                 check: uci show nlbwmon | grep local_network"
+		echo "local subnets:   none resolved from nlbwmon, falling back to the neighbour table (check uci show nlbwmon)"
 	fi
 	echo "interval:        ${LIVE_INTERVAL}s"
 	echo "window:          ${LIVE_WINDOW}s"

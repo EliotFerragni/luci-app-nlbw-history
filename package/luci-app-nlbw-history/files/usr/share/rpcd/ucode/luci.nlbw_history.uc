@@ -106,8 +106,9 @@ function live(req) {
 	return data;
 }
 
-function status() {
-	let out = run(`${COLLECT} --status 2>&1`);
+// key: value lines into an object. Split on the FIRST colon, so a value that
+// contains colons of its own, such as a list of IPv6 prefixes, survives.
+function kv(out) {
 	let info = {};
 
 	for (let line in split(out, '\n')) {
@@ -116,7 +117,16 @@ function status() {
 			info[trim(substr(line, 0, i))] = trim(substr(line, i + 1));
 	}
 
-	return { status: info, raw: out };
+	return info;
+}
+
+// Both samplers, kept apart rather than merged: they each have a 'sampler'
+// key and they mean different processes.
+function status() {
+	let out = run(`${COLLECT} --status 2>&1`);
+	let live = run(`${LIVE} --status 2>&1`);
+
+	return { status: kv(out), live: kv(live), raw: out };
 }
 
 return {

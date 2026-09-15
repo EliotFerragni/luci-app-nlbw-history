@@ -1,4 +1,4 @@
-# luci-app-nlbw-history 1.0.7
+# luci-app-nlbw-history 1.0.8
 
 Historical per-device bandwidth graphs for OpenWrt, built on the counters
 `nlbwmon` already collects. It samples nlbwmon on a timer, stores the delta
@@ -164,13 +164,13 @@ same file works on any target. Take the one your release can install, from the
 
 OpenWrt 25.12 and newer, `luci-app-nlbw-history-<version>.apk`:
 
-    scp luci-app-nlbw-history-1.0.7-r1.apk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.7-r1.apk'
+    scp luci-app-nlbw-history-1.0.8-r1.apk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.8-r1.apk'
 
 OpenWrt 24.10 and older, `luci-app-nlbw-history_<version>_all.ipk`:
 
-    scp luci-app-nlbw-history_1.0.7-1_all.ipk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.7-1_all.ipk'
+    scp luci-app-nlbw-history_1.0.8-1_all.ipk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.8-1_all.ipk'
 
 **Option B: no package manager.** Copy the source tree to the router and run
 `install.sh` on it:
@@ -191,8 +191,8 @@ Either way, check it came up:
 ## Configuration
 
 Everything is editable under **Services → Bandwidth History → Settings**, which
-also shows whether the sampler is alive, when it last ran and how much history
-is on disk. Save & Apply reloads the service for you.
+also shows whether the sampler is alive, when it last ran, how much history is
+on disk, and which local networks are being counted. Save & Apply reloads the service for you.
 
 The last two options are display only: `auto` leaves the clock and the date
 order to whatever browser the page is open in, which is usually right, and the

@@ -63,6 +63,7 @@ return view.extend({
 
 	render: function(res) {
 		const st = (res && res.status) || {};
+		const lv = (res && res.live) || {};
 		let m, s, o;
 
 		m = new form.Map('nlbw-history', _('Bandwidth History'),
@@ -87,6 +88,14 @@ return view.extend({
 		info('stored', 'stored', _('Stored history'));
 		info('spool', 'spool', _('Buffered in RAM'));
 		info('discarded', 'discarded', _('Discarded samples'));
+
+		// From nlbwmon's own local_network list, which is what decides whose
+		// traffic either page counts.
+		o = s.option(form.DummyValue, '_subnets', _('Local networks'),
+			_('Read from nlbwmon\'s own local_network list. A connection is counted only when ' +
+			  'exactly one end is inside one of these, so traffic between two local hosts, or ' +
+			  'to the router itself, appears on neither page.'));
+		o.cfgvalue = function() { return lv['local subnets'] || _('unknown'); };
 
 		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Sampling'));
 		s.anonymous = true;
