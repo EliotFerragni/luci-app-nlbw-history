@@ -140,6 +140,52 @@ return view.extend({
 		o.inputstyle = 'apply';
 		o.onclick = runScrub;
 
+		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Protocols'));
+		s.anonymous = true;
+		s.addremove = false;
+
+		o = s.option(form.Flag, 'protocols', _('Record protocols'),
+			_('Also record which protocol each device was using, so you can filter the graphs ' +
+			  'by protocol. Costs one extra query to nlbwmon per sample and more storage.'));
+		o.default = '1';
+		o.rmempty = false;
+
+		o = s.option(form.Value, 'protocol_interval', _('Protocol resolution'),
+			_('Seconds per stored protocol bucket. The protocol dimension multiplies the number ' +
+			  'of rows, so this is deliberately coarser than the sampling interval. Protocol ' +
+			  'graphs cannot show detail finer than this.'));
+		o.datatype = 'range(60,86400)';
+		o.placeholder = '900';
+		o.value('300', _('5 minutes'));
+		o.value('900', _('15 minutes'));
+		o.value('3600', _('1 hour'));
+		o.depends('protocols', '1');
+
+		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Live view'));
+		s.anonymous = true;
+		s.addremove = false;
+
+		o = s.option(form.Value, 'live_interval', _('Seconds per bar'),
+			_('The Live tab reads conntrack directly rather than nlbwmon, and stores nothing. ' +
+			  'Offloaded connections only reach conntrack about every 3 seconds, a tenth of ' +
+			  'net.netfilter.nf_conntrack_tcp_timeout_offload, so finer bars than that need ' +
+			  'that sysctl lowered as well or they will simply be empty most of the time.'));
+		o.datatype = 'range(1,60)';
+		o.placeholder = '3';
+		o.value('1', _('1 second'));
+		o.value('3', _('3 seconds'));
+		o.value('5', _('5 seconds'));
+		o.value('10', _('10 seconds'));
+
+		o = s.option(form.Value, 'live_window', _('Live window'),
+			_('Seconds kept in RAM, which is how much of the recent past the live chart shows. ' +
+			  'Nothing here is written to storage.'));
+		o.datatype = 'range(30,3600)';
+		o.placeholder = '180';
+		o.value('60', _('1 minute'));
+		o.value('180', _('3 minutes'));
+		o.value('600', _('10 minutes'));
+
 		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Storage'));
 		s.anonymous = true;
 		s.addremove = false;
@@ -169,31 +215,6 @@ return view.extend({
 		o.value('1800', _('30 minutes'));
 		o.value('3600', _('1 hour'));
 
-		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Live view'));
-		s.anonymous = true;
-		s.addremove = false;
-
-		o = s.option(form.Value, 'live_interval', _('Seconds per bar'),
-			_('The Live tab reads conntrack directly rather than nlbwmon, and stores nothing. ' +
-			  'Offloaded connections only reach conntrack about every 3 seconds, a tenth of ' +
-			  'net.netfilter.nf_conntrack_tcp_timeout_offload, so finer bars than that need ' +
-			  'that sysctl lowered as well or they will simply be empty most of the time.'));
-		o.datatype = 'range(1,60)';
-		o.placeholder = '3';
-		o.value('1', _('1 second'));
-		o.value('3', _('3 seconds'));
-		o.value('5', _('5 seconds'));
-		o.value('10', _('10 seconds'));
-
-		o = s.option(form.Value, 'live_window', _('Live window'),
-			_('Seconds kept in RAM, which is how much of the recent past the live chart shows. ' +
-			  'Nothing here is written to storage.'));
-		o.datatype = 'range(30,3600)';
-		o.placeholder = '180';
-		o.value('60', _('1 minute'));
-		o.value('180', _('3 minutes'));
-		o.value('600', _('10 minutes'));
-
 		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Display'));
 		s.anonymous = true;
 		s.addremove = false;
@@ -211,27 +232,6 @@ return view.extend({
 		o.value('dmy', _('Day first (31/12)'));
 		o.value('mdy', _('Month first (12/31)'));
 		o.default = 'auto';
-
-		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Protocols'));
-		s.anonymous = true;
-		s.addremove = false;
-
-		o = s.option(form.Flag, 'protocols', _('Record protocols'),
-			_('Also record which protocol each device was using, so you can filter the graphs ' +
-			  'by protocol. Costs one extra query to nlbwmon per sample and more storage.'));
-		o.default = '1';
-		o.rmempty = false;
-
-		o = s.option(form.Value, 'protocol_interval', _('Protocol resolution'),
-			_('Seconds per stored protocol bucket. The protocol dimension multiplies the number ' +
-			  'of rows, so this is deliberately coarser than the sampling interval. Protocol ' +
-			  'graphs cannot show detail finer than this.'));
-		o.datatype = 'range(60,86400)';
-		o.placeholder = '900';
-		o.value('300', _('5 minutes'));
-		o.value('900', _('15 minutes'));
-		o.value('3600', _('1 hour'));
-		o.depends('protocols', '1');
 
 		return m.render();
 	}
