@@ -112,40 +112,86 @@ function slotsOf(data) {
 	const n = Math.max(2, Math.min(400, Math.round(win / iv)));
 	const times = data.times || [];
 	const now = data.now || times[times.length - 1] || 0;
-	return { n: n, win: win, slot: win / n, from: now - win, now: now };
+	const slot = win / n;
+	// Anchored to the clock, not to the moment this reply was built. Anchored
+	// to now, the grid moves a fraction of a bar on every poll and every
+	// sample rebuckets, so bars deep in the past change for no reason and two
+	// browsers polling a moment apart draw different charts from the same
+	// data. Snapped to absolute time the boundaries are the same everywhere,
+	// the grid only ever advances a whole bar, and a bar that has passed
+	// keeps its value.
+	const end = (Math.floor(now / slot) + 1) * slot;
+	return { n: n, win: win, slot: slot, from: end - win, end: end };
 }
 
-// Bytes per slot and seconds covered per slot, so a sample that spanned more
-// than one interval still reports the rate it actually ran at.
+// Conntrack counters for an offloaded connection do not move smoothly: the
+// kernel folds the hardware counters in about every three seconds, per flow
+// and on each flow's own phase. Sampling a stepped signal at roughly the step
+// period aliases, so a naive reading gives an empty bar followed by a double
+// one, over and over.
+//
+// There is nothing to synchronise to. nf_ct_acct_add() only does two atomic
+// adds, there is no conntrack event for a counter update, and each flow is
+// phased independently anyway.
+//
+// So spread instead: a delta is known to have accumulated between this reading
+// and the previous non-zero one FOR THAT KEY, and uniformly across that span
+// is the best estimate available. Totals are preserved exactly, empty bars
+// stop appearing, and the double bars go with them. The cost is that a genuine
+// burst is smeared back over the gap before it, which is honest, because below
+// about three seconds there is no finer truth to report.
+//
+// Bounded, though. An active flow gets a writeback every few seconds, so a key
+// that reported nothing for a long stretch was genuinely idle and has only
+// just resumed. Spreading that resumption across the whole idle period would
+// paint traffic over minutes that were actually quiet, so the span is capped
+// and anything older is left where it is: recent.
+function spread(dst, sl, t0, t1, v) {
+	const total = t1 - t0;
+	if (!(total > 0)) return;
+	const lo = Math.max(0, Math.floor((t0 - sl.from) / sl.slot));
+	const hi = Math.min(sl.n - 1, Math.floor((t1 - sl.from) / sl.slot));
+	for (let i = lo; i <= hi; i++) {
+		// slot i covers [s0, s1)
+		const s0 = sl.from + i * sl.slot, s1 = s0 + sl.slot;
+		const a = Math.max(t0, s0), b = Math.min(t1, s1);
+		if (b > a) dst[i] += v * (b - a) / total;
+	}
+}
+
 function ratesOf(data, field, sl) {
 	const times = data.times || [];
 	const keys = Object.keys(data.series || {});
-	const out = {}, span = [];
+	const iv = data.interval || 1;
+	// Wide enough to swallow the three second writeback and its aliasing,
+	// narrow enough that a quiet minute stays quiet.
+	const cap = Math.max(3 * iv, 10);
+	const out = {};
 
 	for (let k of keys) {
 		out[k] = [];
 		for (let i = 0; i < sl.n; i++) out[k][i] = 0;
 	}
-	for (let i = 0; i < sl.n; i++) span[i] = 0;
 
-	for (let i = 0; i < times.length; i++) {
-		// Counted back from now rather than forward from the window start, so
-		// the newest slot is the one ending at now. Measuring forward puts a
-		// sample taken exactly at now one past the last slot, and clamping it
-		// back then merges it with the sample before it.
-		const back = Math.floor((sl.now - times[i]) / sl.slot);
-		if (back < 0 || back >= sl.n) continue;
-		const j = sl.n - 1 - back;
-		let sp = (i > 0) ? (times[i] - times[i - 1]) : data.interval;
-		if (!(sp > 0)) sp = data.interval || 1;
-		span[j] += sp;
-		for (let k of keys)
-			out[k][j] += (data.series[k] && data.series[k][field][i]) || 0;
+	for (let k of keys) {
+		const arr = (data.series[k] && data.series[k][field]) || [];
+		// Where this key last reported, so the first reading of a key is
+		// charged to one interval rather than to the whole window.
+		let prev = (times.length ? times[0] - iv : 0);
+		for (let i = 0; i < times.length; i++) {
+			const v = arr[i] || 0;
+			if (v <= 0) continue;
+			let t0 = prev;
+			const t1 = times[i];
+			prev = t1;
+			if (!(t1 > t0)) t0 = t1 - iv;
+			if (t1 - t0 > cap) t0 = t1 - cap;
+			spread(out[k], sl, t0, t1, v);
+		}
 	}
 
 	for (let k of keys)
-		for (let i = 0; i < sl.n; i++)
-			out[k][i] = (span[i] > 0) ? (out[k][i] / span[i]) : 0;
+		for (let i = 0; i < sl.n; i++) out[k][i] = out[k][i] / sl.slot;
 
 	return out;
 }
@@ -192,7 +238,7 @@ function renderCharts(node, data, onToggle) {
 			corner: corner,
 			tip: function(k, i, v) {
 				const ki = keys.indexOf(k);
-				return chart.fmtClock(sl.now - (sl.n - 1 - i) * sl.slot) + '  ' +
+				return chart.fmtClock(sl.from + i * sl.slot) + '  ' +
 				       labels[ki] + '  ' + fmtR(v);
 			}
 		});

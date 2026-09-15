@@ -1,4 +1,4 @@
-# luci-app-nlbw-history 1.0.10
+# luci-app-nlbw-history 1.0.11
 
 Historical per-device bandwidth graphs for OpenWrt, built on the counters
 `nlbwmon` already collects. It samples nlbwmon on a timer, stores the delta
@@ -101,6 +101,21 @@ The chart always spans the whole `live_window`, even before that much has been
 collected, so the bars keep their width instead of starting enormous and
 shrinking with every poll until the window fills.
 
+Counters for an offloaded connection do not move smoothly. The kernel folds the
+hardware counters in roughly every three seconds, per flow and on each flow's
+own phase, so reading them every few seconds aliases: an empty bar, then a
+double one, over and over. There is nothing to synchronise to and no event to
+wait for, so instead each reading is spread across the span it actually
+accumulated in. Totals stay exact, the empty bars go away, and a burst is
+smeared back over at most ten seconds rather than over a genuinely quiet
+stretch.
+
+The bars sit on absolute clock boundaries rather than being measured back from
+whenever the page last polled. Measured back, the grid shifts a fraction of a
+bar on every poll and every sample lands in a different bucket, so bars deep in
+the past change for no reason and two browsers open on the same router draw
+different charts from identical data.
+
 Two things the live view is not. It is not accounting: a connection that opens
 and closes between two samples is never seen, which is why the history graphs
 keep using nlbwmon, the only thing here that subscribes to conntrack's teardown
@@ -168,13 +183,13 @@ same file works on any target. Take the one your release can install, from the
 
 OpenWrt 25.12 and newer, `luci-app-nlbw-history-<version>.apk`:
 
-    scp luci-app-nlbw-history-1.0.10-r1.apk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.10-r1.apk'
+    scp luci-app-nlbw-history-1.0.11-r1.apk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.11-r1.apk'
 
 OpenWrt 24.10 and older, `luci-app-nlbw-history_<version>_all.ipk`:
 
-    scp luci-app-nlbw-history_1.0.10-1_all.ipk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.10-1_all.ipk'
+    scp luci-app-nlbw-history_1.0.11-1_all.ipk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.11-1_all.ipk'
 
 **Option B: no package manager.** Copy the source tree to the router and run
 `install.sh` on it:
