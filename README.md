@@ -1,4 +1,4 @@
-# luci-app-nlbw-history 1.0.12
+# luci-app-nlbw-history 1.0.13
 
 Per-device bandwidth graphs for OpenWrt, under **Services → Bandwidth
 History**, with a *History* tab, a *Live* tab and a *Settings* tab.
@@ -91,12 +91,12 @@ not been run on 25.12 hardware.
 architecture independent, so the same file works on any target:
 
     # OpenWrt 25.12 and newer
-    scp luci-app-nlbw-history-1.0.12-r1.apk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.12-r1.apk'
+    scp luci-app-nlbw-history-1.0.13-r1.apk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-app-nlbw-history-1.0.13-r1.apk'
 
     # 24.10 and older
-    scp luci-app-nlbw-history_1.0.12-1_all.ipk root@192.168.1.1:/tmp/
-    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.12-1_all.ipk'
+    scp luci-app-nlbw-history_1.0.13-1_all.ipk root@192.168.1.1:/tmp/
+    ssh root@192.168.1.1 'opkg install /tmp/luci-app-nlbw-history_1.0.13-1_all.ipk'
 
 **Without a package manager**, copy the source tree to the router and run
 `install.sh` on it; `install.sh --remove` undoes it:
@@ -142,6 +142,10 @@ disk if you have one. Samples are buffered in `/tmp` and written out every
 `flush_interval`, so a hard power cut loses at most that much.
 
 ## Troubleshooting
+
+**Full diagnostics** in Settings shows everything both samplers report, which
+is the same as running `nlbw-history-collect --status` and
+`nlbw-history-live --status` on the router.
 
 **The sampler is not running**
 

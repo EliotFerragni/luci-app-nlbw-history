@@ -126,7 +126,9 @@ function status() {
 	let out = run(`${COLLECT} --status 2>&1`);
 	let live = run(`${LIVE} --status 2>&1`);
 
-	return { status: kv(out), live: kv(live), raw: out };
+	// Both raw dumps as well, for the Full diagnostics button: a parsed map
+	// loses the lines that carry no colon, which is where the hints live.
+	return { status: kv(out), live: kv(live), raw: out, live_raw: live };
 }
 
 return {

@@ -97,6 +97,36 @@ return view.extend({
 			  'to the router itself, appears on neither page.'));
 		o.cfgvalue = function() { return lv['local subnets'] || _('unknown'); };
 
+		// Re-read on click rather than showing what the page loaded with: this
+		// is what someone opens when something looks wrong, and by then the
+		// load-time copy can be minutes old and the live sampler long gone.
+		o = s.option(form.Button, '_raw', _('Full diagnostics'),
+			_('Everything both samplers report, unparsed.'));
+		o.inputtitle = _('Show');
+		o.inputstyle = 'apply';
+		o.onclick = function() {
+			// An array, not E([], ...): LuCI reads an array first argument as
+			// the child list and drops whatever is passed after it.
+			function dump(r) {
+				return [
+					E('h4', {}, 'nlbw-history-collect --status'),
+					E('pre', { style: 'white-space:pre-wrap;margin:0 0 1em' },
+						(r && r.raw) || _('No output.')),
+					E('h4', {}, 'nlbw-history-live --status'),
+					E('pre', { style: 'white-space:pre-wrap;margin:0' },
+						(r && r.live_raw) || _('No output.')),
+					E('div', { 'class': 'right' },
+						E('button', { 'class': 'cbi-button', click: ui.hideModal }, _('Close')))
+				];
+			}
+			ui.showModal(_('Diagnostics'), [ E('p', { 'class': 'spinning' }, _('Reading…')) ]);
+			return callStatus().then(function(fresh) {
+				ui.showModal(_('Diagnostics'), dump(fresh));
+			}).catch(function() {
+				ui.showModal(_('Diagnostics'), dump(res));
+			});
+		};
+
 		s = m.section(form.NamedSection, 'main', 'nlbw_history', _('Sampling'));
 		s.anonymous = true;
 		s.addremove = false;
