@@ -329,7 +329,10 @@ return view.extend({
 		const hiddenNode = E('div', { style: 'font-size:13px;margin-top:8px' });
 		const statusNode = E('div', { style: 'font-size:13px;opacity:0.75;margin-top:8px' });
 		const warnNode = E('div', { 'class': 'alert-message warning', style: 'display:none' });
-		const pauseBtn = E('button', { 'class': 'btn' }, _('Pause'));
+		// Same shape as the firewall live page: first in the row, and coloured
+		// by what it will do, action while running and negative while paused.
+		const pauseBtn = E('button', { 'class': 'cbi-button cbi-button-action',
+			style: 'margin-right:16px' }, _('Pause'));
 		const deviceSel = E('select', { 'class': 'cbi-input-select', style: 'min-width:240px' });
 		const protoSel = E('select', { 'class': 'cbi-input-select', style: 'min-width:140px' });
 		const unitsSel = E('select', { 'class': 'cbi-input-select' }, [
@@ -397,7 +400,14 @@ return view.extend({
 			}, _('show all')));
 		}
 
+		function paintPause() {
+			pauseBtn.textContent = state.paused ? _('Resume') : _('Pause');
+			pauseBtn.className = 'cbi-button' +
+				(state.paused ? ' cbi-button-negative' : ' cbi-button-action');
+		}
+
 		function paint() {
+			paintPause();
 			const d = state.data;
 			if (!d || d.error) {
 				warnNode.style.display = '';
@@ -467,7 +477,6 @@ return view.extend({
 
 		pauseBtn.addEventListener('click', function() {
 			state.paused = !state.paused;
-			pauseBtn.textContent = state.paused ? _('Resume') : _('Pause');
 			paint();
 		});
 
@@ -482,8 +491,8 @@ return view.extend({
 			E('h2', {}, _('Live Bandwidth')),
 			E('div', { 'class': 'cbi-section' }, [
 				E('div', { style: 'display:flex;flex-wrap:wrap;align-items:center;gap:8px 0' },
-					[ field(_('Device'), deviceSel), field(_('Protocol'), protoSel),
-					  field(_('Units'), unitsSel), pauseBtn ]),
+					[ pauseBtn, field(_('Device'), deviceSel), field(_('Protocol'), protoSel),
+					  field(_('Units'), unitsSel) ]),
 				E('p', { 'class': 'cbi-section-descr', style: 'margin:8px 0 0' },
 					_('Read straight from conntrack rather than nlbwmon, and nothing is stored. ' +
 					  'Sampling runs only while this page is open. Pick a device to see which ' +
