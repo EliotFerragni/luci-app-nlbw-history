@@ -40,7 +40,7 @@ and samples only while the page is open.
 
 The same two filters work here, plus a **Units** dropdown that switches the
 rates between bits and bytes per second. Protocols are named by destination
-port, so anything on 443 reads as HTTPS whatever is actually inside it.
+port, so anything on 443 reads as HTTPS no matter what is actually inside it.
 
 Bars default to 3 seconds because that is roughly how often the kernel folds
 hardware-offloaded counters back into conntrack. Finer bars need that made
@@ -63,11 +63,11 @@ Both tabs count the traffic nlbwmon is configured to count, and nothing in
 
 - **Which traffic.** A flow counts only when exactly one end is inside
   nlbwmon's `local_network` list. LAN to LAN, and anything to the router
-  itself, never appears. A device that never shows up is usually on a network
+  itself, never appear. A device that never shows up is usually on a network
   nlbwmon was not told about.
-- **Protocol names.** *HTTPS*, *QUIC*, *SMB* come from nlbwmon's protocol
-  list, so a name you expect, or an *unknown* you do not, is a question for
-  nlbwmon.
+- **Protocol names.** *HTTPS*, *QUIC* and *SMB* come from nlbwmon's protocol
+  list, so a name you expect but do not see, or an *unknown* you do not
+  expect, is a question for nlbwmon.
 - **Counter resets.** nlbwmon rolls over to a new accounting period; stored
   history is unaffected and survives the rollover.
 
@@ -87,7 +87,7 @@ not been run on 25.12 hardware.
 
 ## Install
 
-**The prebuilt package**, from [Releases](../../releases). Both are
+**The prebuilt packages**, from [Releases](../../releases). Both are
 architecture independent, so the same file works on any target:
 
     # OpenWrt 25.12 and newer
@@ -107,7 +107,7 @@ architecture independent, so the same file works on any target:
 **With the OpenWrt SDK**, copy `package/luci-app-nlbw-history` in, select it
 under LuCI → Applications, then `make package/luci-app-nlbw-history/compile`.
 
-Either way, check it came up:
+Whichever way, check it came up:
 
     nlbw-history-collect --status
 
@@ -226,8 +226,8 @@ build, the CI, the release procedure and why the code is shaped the way it is.
 Claude, Anthropic's coding agent, wrote this package: the samplers, the ucode
 backend, the LuCI views, the build scripts and this README. The screenshots are
 the real page rendered against synthetic traffic, so the device names and
-numbers in them are invented. The maintainer set the direction, reviewed the
-result and runs it on the target hardware.
+numbers in them are invented. The maintainer set the direction and reviewed
+the result, and runs the package on the target hardware.
 
 None of that changes what you should do before installing a package from a
 stranger on a router you care about: read the scripts. They are deliberately
