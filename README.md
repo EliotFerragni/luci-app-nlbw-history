@@ -1,5 +1,8 @@
 # luci-app-nlbw-history 1.1.0
 
+[![build](https://github.com/EliotFerragni/luci-app-nlbw-history/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/EliotFerragni/luci-app-nlbw-history/actions/workflows/build.yml)
+![Claude Code](https://img.shields.io/badge/Claude%20Code-%23D97757.svg?style=for-the-badge&logo=claudecode&logoColor=white)
+
 Per-device bandwidth graphs for OpenWrt, under **Services → Bandwidth
 History**, with a *History* tab, a *Live* tab and a *Settings* tab.
 
@@ -221,14 +224,12 @@ which separates a data problem from a display one:
 Working on it rather than running it? [DEVELOPMENT.md](DEVELOPMENT.md) has the
 build, the CI, the release procedure and why the code is shaped the way it is.
 
-## How this was written
+---
 
-Claude, Anthropic's coding agent, wrote this package: the samplers, the ucode
-backend, the LuCI views, the build scripts and this README. The screenshots are
-the real page rendered against synthetic traffic, so the device names and
-numbers in them are invented. The maintainer set the direction and reviewed
-the result, and runs the package on the target hardware.
+This package was written by [Claude Code](https://claude.com/claude-code); see
+[DEVELOPMENT.md](DEVELOPMENT.md#built-with-claude-code). The screenshots are the
+real page drawn against synthetic traffic, so the device names and numbers in
+them are invented.
 
-None of that changes what you should do before installing a package from a
-stranger on a router you care about: read the scripts. They are deliberately
-short, and there are only five of them.
+Before installing a package from a stranger on a router you care about, read
+the scripts. They are deliberately short, and there are only five of them.

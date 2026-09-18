@@ -227,3 +227,12 @@ publishes nothing: the upload happens at the moment the release is published.
 
 The tag is created by GitHub when the release is published, so there is no
 need to tag by hand beforehand.
+
+## Built with Claude Code
+
+This package was written by [Claude Code](https://claude.com/claude-code)
+across a series of sessions: the samplers, the ucode backend, the LuCI views,
+the build scripts, the preview harness, the CI workflow and the documentation.
+What to build, which trade-offs to take and what counted as broken came from
+the human side, as did every run on real hardware. Every commit  written by Claude
+carries a `Co-Authored-By: Claude` trailer, so the history says which is which.
