@@ -224,9 +224,17 @@ publishes nothing: the upload happens at the moment the release is published.
 6. Publishing triggers the workflow, which builds the `.ipk` and the `.apk`
    and attaches both. Check the run finished and both assets are on the
    release page.
+7. The same run asks [the signed feed](https://github.com/EliotFerragni/openwrt-feed)
+   to rebuild, so routers subscribed to it see the new version. That step needs
+   the `FEED_DISPATCH_TOKEN` secret; without it the run only prints a warning
+   and the feed keeps serving the previous release until its `publish` workflow
+   is run by hand.
 
 The tag is created by GitHub when the release is published, so there is no
 need to tag by hand beforehand.
+
+Mark a release as a **pre-release** and the feed will skip it: `build-feed.sh`
+reads `releases/latest`, which ignores drafts and pre-releases.
 
 ## Built with Claude Code
 

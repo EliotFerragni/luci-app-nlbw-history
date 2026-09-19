@@ -85,3 +85,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" *.ipk *.apk --clobber
+
+      - name: Refresh the package feed
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.FEED_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::FEED_DISPATCH_TOKEN is not set, so the feed still serves the previous release. Run the publish workflow in openwrt-feed by hand."
+            exit 0
+          fi
+          gh workflow run publish.yml --repo EliotFerragni/openwrt-feed
+          echo "::notice::Asked openwrt-feed to rebuild."
