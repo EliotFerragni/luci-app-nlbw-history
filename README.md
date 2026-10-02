@@ -90,8 +90,33 @@ not been run on 25.12 hardware.
 
 ## Install
 
+**From the package feed (recommended).** The package is published in a
+[signed OpenWrt feed](https://github.com/EliotFerragni/openwrt-feed). Add it
+once, and the package installs from **System → Software** like any other, and
+new releases show up there as upgrades on their own.
+
+    # OpenWrt 25.12 and newer
+    wget -O /etc/apk/keys/openwrt-feed.pem \
+        https://eliotferragni.github.io/openwrt-feed/keys/openwrt-feed.pem
+    echo "https://eliotferragni.github.io/openwrt-feed/apk/packages.adb" \
+        >> /etc/apk/repositories.d/customfeeds.list
+    apk update
+    apk add luci-app-nlbw-history
+
+    # 24.10 and older
+    wget -O /tmp/feed.pub https://eliotferragni.github.io/openwrt-feed/keys/usign.pub
+    opkg-key add /tmp/feed.pub
+    echo "src/gz eliotferragni https://eliotferragni.github.io/openwrt-feed/opkg" \
+        >> /etc/opkg/customfeeds.conf
+    opkg update
+    opkg install luci-app-nlbw-history
+
+Read the [feed's README](https://github.com/EliotFerragni/openwrt-feed#setting-it-up)
+for more info.
+
 **The prebuilt packages**, from [Releases](../../releases). Both are
-architecture independent, so the same file works on any target:
+architecture independent, so the same file works on any target. Installed this
+way, upgrades are up to you:
 
     # OpenWrt 25.12 and newer
     scp luci-app-nlbw-history-1.1.0-r1.apk root@192.168.1.1:/tmp/
